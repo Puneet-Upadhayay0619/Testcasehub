@@ -2,6 +2,7 @@ using System.Text;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;   // <-- ADD THIS LINE
 using Microsoft.IdentityModel.Tokens;
 using TestCaseHub.Api.Data;
 using TestCaseHub.Api.Services;
@@ -191,9 +192,23 @@ if (storageMode == "SqlServer")
     // Postgres is live, generate a fresh, Postgres-specific migration set at that point
     // (Database:Provider=Postgres when running `dotnet ef migrations add`).
     if (dbProvider == "SqlServer")
+    {
         db.Database.Migrate();
+    }
+    else if (dbProvider == "Postgres")
+    {
+        // EnsureCreated() no-ops when the target database already exists -- and on Supabase
+        // the "postgres" database always pre-exists, so it would silently skip creating any
+        // tables. Force table creation directly instead so a fresh Supabase project still
+        // gets its schema on first boot.
+        var creator = (IRelationalDatabaseCreator)db.Database.GetService<IDatabaseCreator>();
+        if (!creator.HasTables())
+            creator.CreateTables();
+    }
     else
+    {
         db.Database.EnsureCreated();
+    }
 }
 
 if (app.Environment.IsDevelopment())
