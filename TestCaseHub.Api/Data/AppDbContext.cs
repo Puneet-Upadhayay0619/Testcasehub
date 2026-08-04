@@ -44,7 +44,10 @@ public class AppDbContext : DbContext
         // Filtered so only NON-NULL RunAttemptKey values must be unique — SQL Server's default
         // unique-index behaviour otherwise only tolerates a single NULL total, which would
         // break the moment a second manual (non-automated, no attempt key) result was recorded.
-        modelBuilder.Entity<TestRunResult>().HasIndex(r => r.RunAttemptKey).IsUnique().HasFilter("[RunAttemptKey] IS NOT NULL");
+        var runAttemptKeyFilter = Database.ProviderName?.Contains("Npgsql") == true
+        ? "\"RunAttemptKey\" IS NOT NULL"
+        : "[RunAttemptKey] IS NOT NULL";
+        modelBuilder.Entity<TestRunResult>().HasIndex(r => r.RunAttemptKey).IsUnique().HasFilter(runAttemptKeyFilter);
         modelBuilder.Entity<ApiKey>().HasIndex(k => k.KeyHash).IsUnique();
         modelBuilder.Entity<PasswordResetToken>().HasIndex(r => r.TokenHash).IsUnique();
 
