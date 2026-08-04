@@ -2,6 +2,7 @@ using System.Text;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;   // <-- ADD THIS
 using Microsoft.EntityFrameworkCore.Storage;   // <-- ADD THIS LINE
 using Microsoft.IdentityModel.Tokens;
 using TestCaseHub.Api.Data;
@@ -201,7 +202,7 @@ if (storageMode == "SqlServer")
         // the "postgres" database always pre-exists, so it would silently skip creating any
         // tables. Force table creation directly instead so a fresh Supabase project still
         // gets its schema on first boot.
-        var creator = (IRelationalDatabaseCreator)db.Database.GetService<IDatabaseCreator>();
+        var creator = db.GetService<IRelationalDatabaseCreator>();
         if (!creator.HasTables())
             creator.CreateTables();
     }
