@@ -202,9 +202,14 @@ if (storageMode == "SqlServer")
         // the "postgres" database always pre-exists, so it would silently skip creating any
         // tables. Force table creation directly instead so a fresh Supabase project still
         // gets its schema on first boot.
-        var creator = db.GetService<IRelationalDatabaseCreator>();
-        if (!creator.HasTables())
-            creator.CreateTables();
+        try
+        {
+            db.GetService<IRelationalDatabaseCreator>().CreateTables();
+        }
+        catch (Npgsql.PostgresException ex) when (ex.SqlState == "42P07")
+        {
+            // Tables already exist from a previous deploy -- nothing to do.
+        }
     }
     else
     {
