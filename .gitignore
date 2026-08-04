@@ -1,0 +1,10 @@
+bin/
+obj/
+.vs/
+*.user
+*.suo
+TestCaseHub.Api/data.json
+data.json
+appsettings.*.local.json
+.DS_Store
+Thumbs.db
