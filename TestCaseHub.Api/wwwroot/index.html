@@ -168,14 +168,19 @@ async function apiFetch(path, options){
   }
   if(!res.ok){
     let msg = 'Request failed (' + res.status + ')';
+    let rawText = '';
     try{
-      const body = await res.json();
+      rawText = await res.text();
+      const body = rawText ? JSON.parse(rawText) : null;
       if(typeof body === 'string' && body) msg = body;
       else if(body && Array.isArray(body.missing) && body.missing.length) msg = 'Missing: ' + body.missing.join(', ');
       else if(body && body.title) msg = body.title;
       else if(body && body.errors) msg = Object.values(body.errors).flat().join(' ');
       else if(body && body.message) msg = body.message;
-    } catch(e){}
+      else if(rawText) msg = rawText; // plain-text error body (e.g. BadRequest("...")) — not JSON, use as-is
+    } catch(e){
+      if(rawText) msg = rawText;
+    }
     throw new Error(msg);
   }
   if(res.status === 204) return null;
@@ -200,6 +205,7 @@ async function authRequest(apiBase, path, body){
     if(typeof data === 'string' && data) msg = data;
     else if(data && data.title) msg = data.title;
     else if(data && data.errors) msg = Object.values(data.errors).flat().join(' ');
+    else if(!data && text) msg = text; // plain-text error body (e.g. BadRequest("...")) — not JSON, use as-is
     throw new Error(msg);
   }
   return data;
@@ -412,7 +418,13 @@ let state = {
   showManageUsers: false,
   usersLoading: false,
   showInviteLinks: false,
-  invitesLoading: false
+  invitesLoading: false,
+  // A password-reset email link points at "<origin>/reset-password?token=..." -- if that's
+  // how this page was opened, show the "set a new password" screen instead of the normal
+  // login form, regardless of whether someone happens to already be logged in on this browser.
+  resetToken: (typeof location !== 'undefined' ? new URLSearchParams(location.search).get('token') : null) || '',
+  resetSuccess: false,
+  forgotSubmitted: false
 };
 
 function closeAllPanels(){
@@ -518,6 +530,7 @@ async function selectModule(id){
 
 function renderLogin(){
   const mode = state.loginMode || 'login';
+  if(mode === 'forgot') return renderForgotPassword();
   const busyLabel = mode === 'login' ? 'Signing in…' : 'Creating account…';
   return `
     <div class="login-page">
@@ -535,12 +548,59 @@ function renderLogin(){
           <button id="loginSubmitBtn" ${state.loginBusy ? 'disabled' : ''}>${state.loginBusy ? busyLabel : (mode === 'login' ? 'Log in' : 'Create account')}</button>
           <button type="button" class="ghost" id="loginToggleModeBtn">${mode === 'login' ? "Don't have an account? Register" : 'Already have an account? Log in'}</button>
         </div>
+        ${mode === 'login' ? `<p class="toplinks" style="margin-top:10px;"><a href="#" id="forgotPasswordLink">Forgot password?</a></p>` : ''}
+      </div>
+    </div>
+  `;
+}
+
+function renderForgotPassword(){
+  return `
+    <div class="login-page">
+      <h1>Test Case Hub</h1>
+      <p class="sub">Reset your Test Case Hub password.</p>
+      <div class="panel" style="max-width:420px;width:100%;">
+        <h3>Reset password</h3>
+        ${state.forgotSubmitted ? `
+          <p class="sub" style="margin-top:-4px;">If that email has an account, a password reset link has been sent — it's valid for 30 minutes. (Email delivery isn't fully wired up yet, so ask your Admin to check the server logs if it doesn't arrive.)</p>
+          <div class="actions-row"><button type="button" class="ghost" id="backToLoginBtn">Back to log in</button></div>
+        ` : `
+          <div class="field"><label>Email</label><input type="text" id="forgotEmail" placeholder="you@company.com"></div>
+          ${state.loginError ? `<p style="color:#a32d2d;font-size:13px;">${escapeHtml(state.loginError)}</p>` : ''}
+          <div class="actions-row">
+            <button id="forgotSubmitBtn" ${state.loginBusy ? 'disabled' : ''}>${state.loginBusy ? 'Sending…' : 'Send reset link'}</button>
+            <button type="button" class="ghost" id="backToLoginBtn">Back to log in</button>
+          </div>
+        `}
+      </div>
+    </div>
+  `;
+}
+
+function renderResetPassword(){
+  return `
+    <div class="login-page">
+      <h1>Test Case Hub</h1>
+      <p class="sub">Choose a new password for your account.</p>
+      <div class="panel" style="max-width:420px;width:100%;">
+        <h3>Set a new password</h3>
+        ${state.resetSuccess ? `
+          <p class="sub" style="margin-top:-4px;">Password updated — you can log in now with your new password.</p>
+          <div class="actions-row"><button type="button" id="resetGoToLoginBtn">Go to log in</button></div>
+        ` : `
+          <div class="field"><label>New password</label><input type="password" id="resetNewPassword" placeholder="At least 8 characters"></div>
+          ${state.loginError ? `<p style="color:#a32d2d;font-size:13px;">${escapeHtml(state.loginError)}</p>` : ''}
+          <div class="actions-row">
+            <button id="resetSubmitBtn" ${state.loginBusy ? 'disabled' : ''}>${state.loginBusy ? 'Saving…' : 'Set new password'}</button>
+          </div>
+        `}
       </div>
     </div>
   `;
 }
 
 function wireLoginEvents(){
+  if((state.loginMode || 'login') === 'forgot'){ wireForgotPasswordEvents(); return; }
   const toggleBtn = document.getElementById('loginToggleModeBtn');
   if(toggleBtn) toggleBtn.addEventListener('click', () => { state.loginMode = state.loginMode === 'login' ? 'register' : 'login'; state.loginError = null; render(); });
   const submitBtn = document.getElementById('loginSubmitBtn');
@@ -548,6 +608,69 @@ function wireLoginEvents(){
   document.querySelectorAll('#loginApiBase, #loginEmail, #loginPassword, #loginDisplayName, #loginInviteCode').forEach(el => {
     el.addEventListener('keydown', e => { if(e.key === 'Enter'){ e.preventDefault(); submitLogin(); } });
   });
+  const forgotLink = document.getElementById('forgotPasswordLink');
+  if(forgotLink) forgotLink.addEventListener('click', e => { e.preventDefault(); state.loginMode = 'forgot'; state.loginError = null; state.forgotSubmitted = false; render(); });
+}
+
+function wireForgotPasswordEvents(){
+  const backBtn = document.getElementById('backToLoginBtn');
+  if(backBtn) backBtn.addEventListener('click', () => { state.loginMode = 'login'; state.loginError = null; state.forgotSubmitted = false; render(); });
+  const submitBtn = document.getElementById('forgotSubmitBtn');
+  if(submitBtn) submitBtn.addEventListener('click', submitForgotPassword);
+  const emailEl = document.getElementById('forgotEmail');
+  if(emailEl) emailEl.addEventListener('keydown', e => { if(e.key === 'Enter'){ e.preventDefault(); submitForgotPassword(); } });
+}
+
+async function submitForgotPassword(){
+  const emailEl = document.getElementById('forgotEmail');
+  const email = emailEl ? emailEl.value.trim() : '';
+  if(!email){ state.loginError = 'Enter your email.'; render(); return; }
+  state.loginBusy = true; state.loginError = null; render();
+  try{
+    await authRequest(state.apiBaseInput, '/api/auth/forgot-password', { email });
+    state.loginBusy = false;
+    state.forgotSubmitted = true;
+    render();
+  } catch(err){
+    state.loginBusy = false;
+    state.loginError = err.message || 'Something went wrong.';
+    render();
+  }
+}
+
+function wireResetPasswordEvents(){
+  const submitBtn = document.getElementById('resetSubmitBtn');
+  if(submitBtn) submitBtn.addEventListener('click', submitResetPassword);
+  const pwEl = document.getElementById('resetNewPassword');
+  if(pwEl) pwEl.addEventListener('keydown', e => { if(e.key === 'Enter'){ e.preventDefault(); submitResetPassword(); } });
+  const goToLoginBtn = document.getElementById('resetGoToLoginBtn');
+  if(goToLoginBtn) goToLoginBtn.addEventListener('click', () => {
+    state.resetToken = '';
+    state.resetSuccess = false;
+    state.showLogin = true;
+    state.loginMode = 'login';
+    if(typeof history !== 'undefined' && history.replaceState){
+      history.replaceState(null, '', location.origin + '/');
+    }
+    render();
+  });
+}
+
+async function submitResetPassword(){
+  const pwEl = document.getElementById('resetNewPassword');
+  const newPassword = pwEl ? pwEl.value : '';
+  if(!newPassword || newPassword.length < 8){ state.loginError = 'Password must be at least 8 characters.'; render(); return; }
+  state.loginBusy = true; state.loginError = null; render();
+  try{
+    await authRequest(state.apiBaseInput, '/api/auth/reset-password', { token: state.resetToken, newPassword });
+    state.loginBusy = false;
+    state.resetSuccess = true;
+    render();
+  } catch(err){
+    state.loginBusy = false;
+    state.loginError = err.message || 'Could not reset password.';
+    render();
+  }
 }
 
 async function submitLogin(){
@@ -620,6 +743,11 @@ async function bootstrap(){
 
 function render(){
   const app = document.getElementById('app');
+  if(state.resetToken){
+    app.innerHTML = renderResetPassword();
+    wireResetPasswordEvents();
+    return;
+  }
   if(state.showLogin){
     app.innerHTML = renderLogin();
     wireLoginEvents();

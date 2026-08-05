@@ -241,5 +241,5 @@ app.MapGet("/health", async (IDataStore store) =>
     var moduleCount = (await store.GetModulesAsync()).Count;
     return Results.Ok(new { status = "ok", utc = DateTime.UtcNow, moduleCount });
 }).AllowAnonymous();
-
+app.MapFallbackToFile("index.html");
 app.Run();
