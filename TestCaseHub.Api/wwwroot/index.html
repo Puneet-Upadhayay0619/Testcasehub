@@ -370,7 +370,7 @@ function fmtDate(iso){ if(!iso) return ''; const d = new Date(iso); return d.toL
 // DATA now mirrors whatever the server most recently returned — it is a cache for rendering,
 // not the source of truth. bootstrap() fills it after login; module selection, history expand,
 // AI-generate and import all refresh the relevant slice after they write to the server.
-let DATA = { modules: [], taskLinks: [], testCases: [], history: [], priorities: PRIORITIES.slice(), statuses: STATUSES.slice() };
+let DATA = { modules: [], taskLinks: [], testCases: [], history: [], priorities: PRIORITIES.slice(), statuses: STATUSES.slice(), users: [] };
 
 let state = {
   showLogin: true,
@@ -408,7 +408,9 @@ let state = {
   importLayer: '',
   importVerification: '',
   importPreview: null,
-  importCommitted: false
+  importCommitted: false,
+  showManageUsers: false,
+  usersLoading: false
 };
 
 function closeAllPanels(){
@@ -429,6 +431,7 @@ function closeAllPanels(){
   state.importVerification = '';
   state.importPreview = null;
   state.importCommitted = false;
+  state.showManageUsers = false;
 }
 
 function moduleById(id){ return DATA.modules.find(m => m.id === String(id)); }
@@ -644,6 +647,7 @@ function render(){
         ${state.showAddTestCase || state.editingId ? renderTestCaseForm() : ''}
         ${state.showExportPicker ? renderExportPicker() : ''}
         ${state.showImport ? renderImportForm() : ''}
+        ${state.showManageUsers ? renderManageUsers() : ''}
         ${isAnyPanelOpen() ? '' : renderMainArea()}
       </div>
     </div>
@@ -659,7 +663,84 @@ function renderMainArea(){
 }
 
 function isAnyPanelOpen(){
-  return state.showAddModule || state.showAddTestCase || !!state.editingId || !!state.showAddTaskLink || state.showExportPicker || state.showImport;
+  return state.showAddModule || state.showAddTestCase || !!state.editingId || !!state.showAddTaskLink || state.showExportPicker || state.showImport || state.showManageUsers;
+}
+
+// ---------- Admin: Manage Users ----------
+
+async function loadUsers(){
+  state.usersLoading = true;
+  render();
+  try{
+    DATA.users = await apiFetch('/api/users');
+  } catch(err){
+    showToast('Could not load users: ' + err.message, 'error');
+  }
+  state.usersLoading = false;
+  render();
+}
+
+async function updateUserRole(id, role){
+  const target = (DATA.users || []).find(u => u.id === id);
+  if(!target) return;
+  try{
+    const updated = await apiFetch('/api/users/' + id + '/access', { method:'PUT', body: JSON.stringify({
+      role, layerScope: target.layerScope || [], moduleScope: target.moduleScope || []
+    }) });
+    DATA.users = (DATA.users || []).map(u => u.id === id ? updated : u);
+    render();
+    showToast('Role updated to ' + updated.role + ' for ' + updated.email + '.', 'success');
+  } catch(err){
+    showToast('Could not update role: ' + err.message, 'error');
+    render();
+  }
+}
+
+async function toggleUserActive(id, activate){
+  try{
+    const updated = await apiFetch('/api/users/' + id + '/' + (activate ? 'reactivate' : 'deactivate'), { method:'POST' });
+    DATA.users = (DATA.users || []).map(u => u.id === id ? updated : u);
+    render();
+    showToast((activate ? 'Reactivated ' : 'Deactivated ') + updated.email + '.', 'success');
+  } catch(err){
+    showToast('Could not update user status: ' + err.message, 'error');
+    render();
+  }
+}
+
+function renderManageUsers(){
+  if(state.usersLoading){
+    return `<div class="panel"><h3>Manage Users</h3><p class="sub" style="margin-top:-6px;">Loading users…</p></div>`;
+  }
+  const rows = (DATA.users || []).map(u => `
+    <tr>
+      <td>${escapeHtml(u.displayName)}<br><small class="muted">${escapeHtml(u.email)}</small></td>
+      <td>
+        <select class="roleSelect" data-uid="${u.id}">
+          ${['Admin','Lead','Contributor','Viewer'].map(r => `<option value="${r}" ${u.role===r?'selected':''}>${r}</option>`).join('')}
+        </select>
+      </td>
+      <td>${u.isActive ? '<span class="badge b-active">Active</span>' : '<span class="badge b-deprecated">Inactive</span>'}</td>
+      <td>${fmtDate(u.createdAt)}</td>
+      <td>
+        ${u.isActive
+          ? `<button type="button" class="small ghost" data-deactivate-user="${u.id}">Deactivate</button>`
+          : `<button type="button" class="small ghost" data-reactivate-user="${u.id}">Reactivate</button>`}
+      </td>
+    </tr>
+  `).join('');
+
+  return `
+    <div class="panel">
+      <h3>Manage Users</h3>
+      <p class="sub" style="margin-top:-6px;">Change a teammate's role, or deactivate/reactivate their login. Role changes take effect the next time they log in or their session refreshes.</p>
+      <table>
+        <thead><tr><th>User</th><th>Role</th><th>Status</th><th>Joined</th><th></th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="5" class="empty">No users found.</td></tr>'}</tbody>
+      </table>
+      <div class="actions-row"><button type="button" class="ghost" id="closeManageUsers">Close</button></div>
+    </div>
+  `;
 }
 
 function renderExportPicker(){
@@ -818,6 +899,7 @@ function renderSidebar(){
       <div class="sidebar-item menu-item" id="menuAddTestCase" title="Add test case"><span class="item-icon">📝</span><span class="item-text">Add test case</span></div>
       <div class="sidebar-item menu-item" id="menuImport" title="Import from spreadsheet"><span class="item-icon">📥</span><span class="item-text">Import from spreadsheet</span></div>
       <div class="sidebar-item menu-item" id="menuDownload" title="Download test cases"><span class="item-icon">📤</span><span class="item-text">Download test cases${exportScopeLabel()}</span></div>
+      ${(AUTH && AUTH.role === 'Admin') ? `<div class="sidebar-item menu-item" id="menuManageUsers" title="Manage Users"><span class="item-icon">🛡️</span><span class="item-text">Manage Users</span></div>` : ''}
     </div>
   `;
 }
@@ -1154,6 +1236,31 @@ function wireEvents(){
 
   const menuImport = document.getElementById('menuImport');
   if(menuImport) menuImport.addEventListener('click', () => { const next = !state.showImport; closeAllPanels(); state.showImport = next; render(); });
+
+  const menuManageUsers = document.getElementById('menuManageUsers');
+  if(menuManageUsers) menuManageUsers.addEventListener('click', () => {
+    const next = !state.showManageUsers;
+    closeAllPanels();
+    state.showManageUsers = next;
+    render();
+    if(next) loadUsers();
+  });
+
+  const closeManageUsers = document.getElementById('closeManageUsers');
+  if(closeManageUsers) closeManageUsers.addEventListener('click', () => { state.showManageUsers = false; render(); });
+
+  document.querySelectorAll('.roleSelect').forEach(el => el.addEventListener('change', () => {
+    updateUserRole(Number(el.dataset.uid), el.value);
+  }));
+
+  document.querySelectorAll('[data-deactivate-user]').forEach(el => el.addEventListener('click', () => {
+    if(!confirm('Deactivate this user? They will not be able to log in until reactivated.')) return;
+    toggleUserActive(Number(el.dataset.deactivateUser), false);
+  }));
+
+  document.querySelectorAll('[data-reactivate-user]').forEach(el => el.addEventListener('click', () => {
+    toggleUserActive(Number(el.dataset.reactivateUser), true);
+  }));
 
   const importFile = document.getElementById('importFile');
   if(importFile) importFile.addEventListener('change', e => {
