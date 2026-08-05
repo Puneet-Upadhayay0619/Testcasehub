@@ -370,7 +370,7 @@ function fmtDate(iso){ if(!iso) return ''; const d = new Date(iso); return d.toL
 // DATA now mirrors whatever the server most recently returned — it is a cache for rendering,
 // not the source of truth. bootstrap() fills it after login; module selection, history expand,
 // AI-generate and import all refresh the relevant slice after they write to the server.
-let DATA = { modules: [], taskLinks: [], testCases: [], history: [], priorities: PRIORITIES.slice(), statuses: STATUSES.slice(), users: [] };
+let DATA = { modules: [], taskLinks: [], testCases: [], history: [], priorities: PRIORITIES.slice(), statuses: STATUSES.slice(), users: [], invites: [] };
 
 let state = {
   showLogin: true,
@@ -410,7 +410,9 @@ let state = {
   importPreview: null,
   importCommitted: false,
   showManageUsers: false,
-  usersLoading: false
+  usersLoading: false,
+  showInviteLinks: false,
+  invitesLoading: false
 };
 
 function closeAllPanels(){
@@ -432,6 +434,7 @@ function closeAllPanels(){
   state.importPreview = null;
   state.importCommitted = false;
   state.showManageUsers = false;
+  state.showInviteLinks = false;
 }
 
 function moduleById(id){ return DATA.modules.find(m => m.id === String(id)); }
@@ -524,6 +527,7 @@ function renderLogin(){
         <h3>${mode === 'login' ? 'Log in' : 'Create an account'}</h3>
         <input type="hidden" id="loginApiBase" value="${escapeHtml(state.apiBaseInput || '')}">
         ${mode === 'register' ? `<div class="field"><label>Display name</label><input type="text" id="loginDisplayName" placeholder="e.g. Puneet"></div>` : ''}
+        ${mode === 'register' ? `<div class="field"><label>Invite code</label><input type="text" id="loginInviteCode" placeholder="Ask an Admin for one — not needed for the very first account"></div>` : ''}
         <div class="field"><label>Email</label><input type="text" id="loginEmail" placeholder="you@company.com"></div>
         <div class="field"><label>Password</label><input type="password" id="loginPassword"></div>
         ${state.loginError ? `<p style="color:#a32d2d;font-size:13px;">${escapeHtml(state.loginError)}</p>` : ''}
@@ -541,7 +545,7 @@ function wireLoginEvents(){
   if(toggleBtn) toggleBtn.addEventListener('click', () => { state.loginMode = state.loginMode === 'login' ? 'register' : 'login'; state.loginError = null; render(); });
   const submitBtn = document.getElementById('loginSubmitBtn');
   if(submitBtn) submitBtn.addEventListener('click', submitLogin);
-  document.querySelectorAll('#loginApiBase, #loginEmail, #loginPassword, #loginDisplayName').forEach(el => {
+  document.querySelectorAll('#loginApiBase, #loginEmail, #loginPassword, #loginDisplayName, #loginInviteCode').forEach(el => {
     el.addEventListener('keydown', e => { if(e.key === 'Enter'){ e.preventDefault(); submitLogin(); } });
   });
 }
@@ -553,6 +557,8 @@ async function submitLogin(){
   const mode = state.loginMode || 'login';
   const displayNameEl = document.getElementById('loginDisplayName');
   const displayName = displayNameEl ? displayNameEl.value.trim() : '';
+  const inviteCodeEl = document.getElementById('loginInviteCode');
+  const inviteCode = inviteCodeEl ? inviteCodeEl.value.trim() : '';
 
   if(!apiBase){ state.loginError = 'Could not detect the server URL automatically — please reload the page.'; render(); return; }
   if(!email || !password){ state.loginError = 'Email and password are required.'; render(); return; }
@@ -565,7 +571,7 @@ async function submitLogin(){
 
   try{
     const path = mode === 'login' ? '/api/auth/login' : '/api/auth/register';
-    const body = mode === 'login' ? { email, password } : { email, password, displayName };
+    const body = mode === 'login' ? { email, password } : { email, password, displayName, inviteCode };
     const res = await authRequest(apiBase, path, body);
     saveAuth({ token: res.token, apiBase, email: res.email || email, displayName: res.displayName || displayName, role: res.role });
     state.loginBusy = false;
@@ -648,6 +654,7 @@ function render(){
         ${state.showExportPicker ? renderExportPicker() : ''}
         ${state.showImport ? renderImportForm() : ''}
         ${state.showManageUsers ? renderManageUsers() : ''}
+        ${state.showInviteLinks ? renderInviteLinks() : ''}
         ${isAnyPanelOpen() ? '' : renderMainArea()}
       </div>
     </div>
@@ -663,7 +670,7 @@ function renderMainArea(){
 }
 
 function isAnyPanelOpen(){
-  return state.showAddModule || state.showAddTestCase || !!state.editingId || !!state.showAddTaskLink || state.showExportPicker || state.showImport || state.showManageUsers;
+  return state.showAddModule || state.showAddTestCase || !!state.editingId || !!state.showAddTaskLink || state.showExportPicker || state.showImport || state.showManageUsers || state.showInviteLinks;
 }
 
 // ---------- Admin: Manage Users ----------
@@ -739,6 +746,75 @@ function renderManageUsers(){
         <tbody>${rows || '<tr><td colspan="5" class="empty">No users found.</td></tr>'}</tbody>
       </table>
       <div class="actions-row"><button type="button" class="ghost" id="closeManageUsers">Close</button></div>
+    </div>
+  `;
+}
+
+// ---------- Admin: Invite Links ----------
+
+async function loadInvites(){
+  state.invitesLoading = true;
+  render();
+  try{
+    DATA.invites = await apiFetch('/api/invites');
+  } catch(err){
+    showToast('Could not load invites: ' + err.message, 'error');
+  }
+  state.invitesLoading = false;
+  render();
+}
+
+async function createInvite(maxUses, expiresInDays){
+  try{
+    const created = await apiFetch('/api/invites', { method:'POST', body: JSON.stringify({ maxUses, expiresInDays }) });
+    DATA.invites = [created].concat(DATA.invites || []);
+    render();
+    showToast('Invite code created: ' + created.code, 'success');
+  } catch(err){
+    showToast('Could not create invite: ' + err.message, 'error');
+  }
+}
+
+async function revokeInvite(id){
+  try{
+    const updated = await apiFetch('/api/invites/' + id + '/revoke', { method:'POST' });
+    DATA.invites = (DATA.invites || []).map(i => i.id === id ? updated : i);
+    render();
+    showToast('Invite revoked.', 'success');
+  } catch(err){
+    showToast('Could not revoke invite: ' + err.message, 'error');
+  }
+}
+
+function renderInviteLinks(){
+  if(state.invitesLoading){
+    return `<div class="panel"><h3>Invite Links</h3><p class="sub" style="margin-top:-6px;">Loading invites…</p></div>`;
+  }
+  const rows = (DATA.invites || []).map(i => `
+    <tr>
+      <td><code>${escapeHtml(i.code)}</code> <button type="button" class="small ghost" data-copy-invite="${escapeHtml(i.code)}">Copy</button></td>
+      <td>${i.usedCount} / ${i.maxUses}</td>
+      <td>${fmtDate(i.expiresAt)}</td>
+      <td>${i.revoked ? '<span class="badge b-deprecated">Revoked</span>' : (i.isUsable ? '<span class="badge b-active">Usable</span>' : '<span class="badge b-draft">Used up / expired</span>')}</td>
+      <td>${escapeHtml(i.createdByEmail)}</td>
+      <td>${i.isUsable ? `<button type="button" class="small ghost" data-revoke-invite="${i.id}">Revoke</button>` : ''}</td>
+    </tr>
+  `).join('');
+
+  return `
+    <div class="panel">
+      <h3>Invite Links</h3>
+      <p class="sub" style="margin-top:-6px;">Generate a code for a new teammate to register with — self-registration is closed, so this is the only way for someone new to join. Give them the code plus the app URL.</p>
+      <div class="grid2">
+        <div class="field"><label>Max uses</label><input type="text" id="inviteMaxUses" value="1"></div>
+        <div class="field"><label>Expires in (days)</label><input type="text" id="inviteExpiresDays" value="7"></div>
+      </div>
+      <div class="actions-row"><button type="button" id="generateInviteBtn">Generate invite code</button></div>
+      <table style="margin-top:14px;">
+        <thead><tr><th>Code</th><th>Uses</th><th>Expires</th><th>Status</th><th>Created by</th><th></th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="6" class="empty">No invites yet.</td></tr>'}</tbody>
+      </table>
+      <div class="actions-row"><button type="button" class="ghost" id="closeInviteLinks">Close</button></div>
     </div>
   `;
 }
@@ -900,6 +976,7 @@ function renderSidebar(){
       <div class="sidebar-item menu-item" id="menuImport" title="Import from spreadsheet"><span class="item-icon">📥</span><span class="item-text">Import from spreadsheet</span></div>
       <div class="sidebar-item menu-item" id="menuDownload" title="Download test cases"><span class="item-icon">📤</span><span class="item-text">Download test cases${exportScopeLabel()}</span></div>
       ${(AUTH && AUTH.role === 'Admin') ? `<div class="sidebar-item menu-item" id="menuManageUsers" title="Manage Users"><span class="item-icon">🛡️</span><span class="item-text">Manage Users</span></div>` : ''}
+      ${(AUTH && AUTH.role === 'Admin') ? `<div class="sidebar-item menu-item" id="menuInviteLinks" title="Invite Links"><span class="item-icon">🎟️</span><span class="item-text">Invite Links</span></div>` : ''}
     </div>
   `;
 }
@@ -1260,6 +1337,39 @@ function wireEvents(){
 
   document.querySelectorAll('[data-reactivate-user]').forEach(el => el.addEventListener('click', () => {
     toggleUserActive(Number(el.dataset.reactivateUser), true);
+  }));
+
+  const menuInviteLinks = document.getElementById('menuInviteLinks');
+  if(menuInviteLinks) menuInviteLinks.addEventListener('click', () => {
+    const next = !state.showInviteLinks;
+    closeAllPanels();
+    state.showInviteLinks = next;
+    render();
+    if(next) loadInvites();
+  });
+
+  const closeInviteLinks = document.getElementById('closeInviteLinks');
+  if(closeInviteLinks) closeInviteLinks.addEventListener('click', () => { state.showInviteLinks = false; render(); });
+
+  const generateInviteBtn = document.getElementById('generateInviteBtn');
+  if(generateInviteBtn) generateInviteBtn.addEventListener('click', () => {
+    const maxUses = Number(document.getElementById('inviteMaxUses').value) || 1;
+    const expiresInDays = Number(document.getElementById('inviteExpiresDays').value) || 7;
+    createInvite(maxUses, expiresInDays);
+  });
+
+  document.querySelectorAll('[data-revoke-invite]').forEach(el => el.addEventListener('click', () => {
+    if(!confirm('Revoke this invite code? It will no longer work.')) return;
+    revokeInvite(Number(el.dataset.revokeInvite));
+  }));
+
+  document.querySelectorAll('[data-copy-invite]').forEach(el => el.addEventListener('click', () => {
+    const code = el.dataset.copyInvite;
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(code).then(() => showToast('Invite code copied.', 'success')).catch(() => showToast('Could not copy — copy it manually: ' + code, 'error'));
+    } else {
+      showToast('Copy not supported here — code: ' + code, 'error');
+    }
   }));
 
   const importFile = document.getElementById('importFile');
