@@ -52,6 +52,8 @@ public class ModulesController : ControllerBase
     [HttpPost("{moduleId:int}/task-links")]
     public async Task<ActionResult<TaskLinkResponse>> AddTaskLink(int moduleId, TaskLinkCreateRequest req)
     {
+        if (!User.CanEditTaskLinks()) return Forbid();
+
         var module = await _store.GetModuleAsync(moduleId);
         if (module is null) return NotFound("Module not found.");
         if (string.IsNullOrWhiteSpace(req.AdoTaskId)) return BadRequest("Task ID is required.");

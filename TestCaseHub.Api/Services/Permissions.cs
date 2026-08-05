@@ -33,6 +33,14 @@ public static class Permissions
     // Agreed: module creation is Contributor and above (moved down from Lead during planning).
     public static bool CanCreateModule(this ClaimsPrincipal user) => user.IsAtLeast(Roles.Contributor);
 
+    // Viewer is read-only by design across the whole app: creating/editing/deprecating test
+    // cases (including bulk-edit and spreadsheet import, which both go through the same
+    // create/update path) requires Contributor and above, same bar as module creation.
+    public static bool CanEditTestCases(this ClaimsPrincipal user) => user.IsAtLeast(Roles.Contributor);
+
+    // Linking an ADO task to a module is content-editing, same bar as everything else here.
+    public static bool CanEditTaskLinks(this ClaimsPrincipal user) => user.IsAtLeast(Roles.Contributor);
+
     // Agreed: only Lead/Admin can set or clear automationReady — this is the role half of the
     // flag-integrity control; the evidence-backed half (script ref / automation config must
     // actually exist) lands in Phase 6.

@@ -72,6 +72,8 @@ public class TestCasesController : ControllerBase
     [HttpPost]
     public async Task<ActionResult> Create(TestCaseCreateRequest req)
     {
+        if (!User.CanEditTestCases()) return Forbid();
+
         var module = await _store.GetModuleAsync(req.ModuleId);
         var missing = TestCaseValidation.Validate(req, module is not null);
         if (missing.Count > 0) return BadRequest(new { missing });
@@ -113,6 +115,8 @@ public class TestCasesController : ControllerBase
     [HttpPut("{id}")]
     public async Task<ActionResult> Update(string id, TestCaseCreateRequest req)
     {
+        if (!User.CanEditTestCases()) return Forbid();
+
         var tc = await _store.GetTestCaseAsync(id);
         if (tc is null) return NotFound();
 
@@ -151,6 +155,8 @@ public class TestCasesController : ControllerBase
     [HttpPost("{id}/deprecate")]
     public async Task<ActionResult> Deprecate(string id)
     {
+        if (!User.CanEditTestCases()) return Forbid();
+
         var tc = await _store.GetTestCaseAsync(id);
         if (tc is null) return NotFound();
 
@@ -225,6 +231,8 @@ public class TestCasesController : ControllerBase
     [HttpPost("bulk-edit")]
     public async Task<ActionResult<BulkEditResult>> BulkEdit(BulkEditRequest req)
     {
+        if (!User.CanEditTestCases()) return Forbid();
+
         var updated = new List<string>();
         var notFound = new List<string>();
 

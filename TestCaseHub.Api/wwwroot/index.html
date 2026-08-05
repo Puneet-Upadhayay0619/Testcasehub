@@ -482,6 +482,13 @@ function filteredTestCases(){
   }).sort((a,b) => (a.updatedAt < b.updatedAt ? 1 : -1));
 }
 
+// Viewer is read-only everywhere in this UI, matching the backend (Permissions.cs
+// CanEditTestCases/CanEditTaskLinks — Contributor and above). Mirrored here so Viewers don't
+// even see controls that would just come back as a 403 if clicked.
+function canEditContent(){
+  return !!(AUTH && AUTH.role && AUTH.role !== 'Viewer');
+}
+
 function escapeHtml(s){
   return String(s==null?'':s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
@@ -1099,9 +1106,9 @@ function renderSidebar(){
       </div>
       ${searchRow}
       <div class="module-list">${moduleRows}</div>
-      <div class="sidebar-item menu-item" id="menuAddModule" title="Add module"><span class="item-icon">➕</span><span class="item-text">Add module</span></div>
-      <div class="sidebar-item menu-item" id="menuAddTestCase" title="Add test case"><span class="item-icon">📝</span><span class="item-text">Add test case</span></div>
-      <div class="sidebar-item menu-item" id="menuImport" title="Import from spreadsheet"><span class="item-icon">📥</span><span class="item-text">Import from spreadsheet</span></div>
+      ${canEditContent() ? `<div class="sidebar-item menu-item" id="menuAddModule" title="Add module"><span class="item-icon">➕</span><span class="item-text">Add module</span></div>` : ''}
+      ${canEditContent() ? `<div class="sidebar-item menu-item" id="menuAddTestCase" title="Add test case"><span class="item-icon">📝</span><span class="item-text">Add test case</span></div>` : ''}
+      ${canEditContent() ? `<div class="sidebar-item menu-item" id="menuImport" title="Import from spreadsheet"><span class="item-icon">📥</span><span class="item-text">Import from spreadsheet</span></div>` : ''}
       <div class="sidebar-item menu-item" id="menuDownload" title="Download test cases"><span class="item-icon">📤</span><span class="item-text">Download test cases${exportScopeLabel()}</span></div>
       ${(AUTH && AUTH.role === 'Admin') ? `<div class="sidebar-item menu-item" id="menuManageUsers" title="Manage Users"><span class="item-icon">🛡️</span><span class="item-text">Manage Users</span></div>` : ''}
       ${(AUTH && AUTH.role === 'Admin') ? `<div class="sidebar-item menu-item" id="menuInviteLinks" title="Invite Links"><span class="item-icon">🎟️</span><span class="item-text">Invite Links</span></div>` : ''}
@@ -1197,7 +1204,7 @@ function renderDetail(tc){
   return `
     <div class="detail">
       <h4>Module</h4>
-      <div>${mod ? escapeHtml(mod.name) + ' (' + escapeHtml(mod.code) + ')' : '—'} <button class="small ghost" data-addlink="${tc.moduleId}">+ Add linked task</button></div>
+      <div>${mod ? escapeHtml(mod.name) + ' (' + escapeHtml(mod.code) + ')' : '—'} ${canEditContent() ? `<button class="small ghost" data-addlink="${tc.moduleId}">+ Add linked task</button>` : ''}</div>
       <h4>Task area / Verification type</h4>
       <div>${escapeHtml(tc.layer)} <span class="muted">·</span> <span class="${badgeClass('v',tc.verificationType)}">${escapeHtml(tc.verificationType||'')}</span></div>
       <h4>Preconditions</h4>
@@ -1213,8 +1220,8 @@ function renderDetail(tc){
       <h4>History</h4>
       <div>${histHtml}</div>
       <div class="actions-row">
-        <button class="small secondary" data-edit="${tc.id}">Edit</button>
-        ${tc.status !== 'Deprecated' ? `<button class="small ghost" data-deprecate="${tc.id}">Mark deprecated</button>` : ''}
+        ${canEditContent() ? `<button class="small secondary" data-edit="${tc.id}">Edit</button>` : ''}
+        ${canEditContent() && tc.status !== 'Deprecated' ? `<button class="small ghost" data-deprecate="${tc.id}">Mark deprecated</button>` : ''}
         <button class="small ghost" data-close="1">Close</button>
       </div>
     </div>
