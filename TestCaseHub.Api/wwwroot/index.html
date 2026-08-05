@@ -73,10 +73,34 @@
   .empty{ text-align:center; color:var(--text-2); padding:24px; font-size:13px; }
   .actions-row{ display:flex; gap:6px; margin-top:10px; }
   .toplinks{ font-size:12px; }
+
+  /* --- UI enhancement pass: topbar, profile widget, sidebar overlay, toasts, centered login --- */
+  .login-page{ min-height:100vh; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:20px; gap:4px; }
+  .login-page h1{ margin-bottom:2px; }
+  .login-page .sub{ text-align:center; }
+  .topbar{ display:flex; align-items:center; gap:12px; padding:10px 16px; background:var(--accent); color:#fff; border-radius:8px; margin-bottom:12px; }
+  .topbar h1{ color:#fff; margin:0; font-size:18px; }
+  .hamburger-btn{ background:transparent; border:1px solid rgba(255,255,255,0.45); color:#fff; font-size:16px; padding:4px 11px; border-radius:6px; cursor:pointer; line-height:1.2; }
+  .hamburger-btn:hover{ background:rgba(255,255,255,0.15); }
+  .profile-widget{ margin-left:auto; display:flex; align-items:center; gap:10px; background:rgba(255,255,255,0.14); border-radius:8px; padding:6px 10px; }
+  .profile-widget .profile-info{ text-align:right; line-height:1.3; }
+  .profile-widget .profile-name{ font-size:13px; font-weight:600; }
+  .profile-widget .profile-email{ font-size:11px; opacity:0.85; }
+  .profile-widget button{ background:#fff; color:var(--accent); border-color:#fff; padding:5px 10px; font-size:12px; }
+  .sidebar-overlay-backdrop{ position:fixed; inset:0; background:rgba(20,24,30,0.28); z-index:40; }
+  .sidebar-overlay{ position:fixed; top:0; left:0; height:100vh; width:270px; background:#fff; box-shadow:2px 0 16px rgba(0,0,0,0.18); z-index:50; overflow-y:auto; padding:14px; }
+  .sidebar-overlay-head{ display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; }
+  .sidebar-overlay-head strong{ font-size:14px; }
+  .toast-container{ position:fixed; top:16px; right:16px; z-index:200; display:flex; flex-direction:column; gap:8px; }
+  .toast{ min-width:220px; max-width:340px; padding:10px 14px; border-radius:8px; font-size:13px; color:#fff; box-shadow:0 4px 14px rgba(0,0,0,0.18); animation:toastIn 0.18s ease-out; }
+  .toast-success{ background:var(--ok); }
+  .toast-error{ background:var(--danger); }
+  @keyframes toastIn{ from{ opacity:0; transform:translateY(-6px);} to{ opacity:1; transform:translateY(0);} }
 </style>
 </head>
 <body>
 <div class="app" id="app"></div>
+<div class="toast-container" id="toastContainer"></div>
 
 <script>
 
@@ -223,7 +247,7 @@ async function addCustomPriority(val){
     if(!DATA.priorities.some(p => p.toLowerCase() === val.toLowerCase())) DATA.priorities.push(val);
     return true;
   } catch(e){
-    alert('Could not save the new priority: ' + e.message);
+    showToast('Could not save the new priority: ' + e.message, 'error');
     return false;
   }
 }
@@ -235,7 +259,7 @@ async function addCustomStatus(val){
     if(!DATA.statuses.some(s => s.toLowerCase() === val.toLowerCase())) DATA.statuses.push(val);
     return true;
   } catch(e){
-    alert('Could not save the new status: ' + e.message);
+    showToast('Could not save the new status: ' + e.message, 'error');
     return false;
   }
 }
@@ -372,6 +396,7 @@ let state = {
   showExportPicker: false,
   moduleListOpen: false,
   moduleSearch: '',
+  sidebarOpen: false,
   showImport: false,
   importStep: 1,
   importHeaders: [],
@@ -441,6 +466,19 @@ function escapeHtml(s){
   return String(s==null?'':s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
+// Small top-right toast for success/failure feedback on any activity (save, delete, import,
+// export, etc.) — lives outside #app so it survives the next render() call instead of getting
+// wiped out immediately.
+function showToast(message, type){
+  const container = document.getElementById('toastContainer');
+  if(!container) return;
+  const el = document.createElement('div');
+  el.className = 'toast toast-' + (type === 'error' ? 'error' : 'success');
+  el.textContent = message;
+  container.appendChild(el);
+  setTimeout(() => { el.remove(); }, 3000);
+}
+
 // loadModuleData/selectModule/refreshModules centralize the "go fetch this module's stuff from
 // the server" logic so every flow that changes test cases (create/edit/deprecate/import/AI
 // generate) can just call these instead of hand-patching DATA.
@@ -464,7 +502,7 @@ async function selectModule(id){
     await loadModuleData(id);
     render();
   } catch(err){
-    alert('Could not load test cases for this module: ' + err.message);
+    showToast('Could not load test cases for this module: ' + err.message, 'error');
   }
 }
 
@@ -472,19 +510,22 @@ async function selectModule(id){
 
 function renderLogin(){
   const mode = state.loginMode || 'login';
+  const busyLabel = mode === 'login' ? 'Signing in…' : 'Creating account…';
   return `
-    <h1>Test Case Hub</h1>
-    <p class="sub">Sign in to your team's Test Case Hub server — everyone points at the same server URL so test cases stay shared.</p>
-    <div class="panel" style="max-width:420px;">
-      <h3>${mode === 'login' ? 'Log in' : 'Create an account'}</h3>
-      <div class="field"><label>API server URL</label><input type="text" id="loginApiBase" placeholder="https://your-server.example.com" value="${escapeHtml(state.apiBaseInput || '')}"></div>
-      ${mode === 'register' ? `<div class="field"><label>Display name</label><input type="text" id="loginDisplayName" placeholder="e.g. Puneet"></div>` : ''}
-      <div class="field"><label>Email</label><input type="text" id="loginEmail" placeholder="you@company.com"></div>
-      <div class="field"><label>Password</label><input type="password" id="loginPassword"></div>
-      ${state.loginError ? `<p style="color:#a32d2d;font-size:13px;">${escapeHtml(state.loginError)}</p>` : ''}
-      <div class="actions-row">
-        <button id="loginSubmitBtn" ${state.loginBusy ? 'disabled' : ''}>${state.loginBusy ? 'Please wait…' : (mode === 'login' ? 'Log in' : 'Create account')}</button>
-        <button type="button" class="ghost" id="loginToggleModeBtn">${mode === 'login' ? "Don't have an account? Register" : 'Already have an account? Log in'}</button>
+    <div class="login-page">
+      <h1>Test Case Hub</h1>
+      <p class="sub">Sign in to your team's Test Case Hub server — everyone points at the same server URL so test cases stay shared.</p>
+      <div class="panel" style="max-width:420px;width:100%;">
+        <h3>${mode === 'login' ? 'Log in' : 'Create an account'}</h3>
+        <div class="field"><label>API server URL</label><input type="text" id="loginApiBase" placeholder="https://your-server.example.com" value="${escapeHtml(state.apiBaseInput || '')}"></div>
+        ${mode === 'register' ? `<div class="field"><label>Display name</label><input type="text" id="loginDisplayName" placeholder="e.g. Puneet"></div>` : ''}
+        <div class="field"><label>Email</label><input type="text" id="loginEmail" placeholder="you@company.com"></div>
+        <div class="field"><label>Password</label><input type="password" id="loginPassword"></div>
+        ${state.loginError ? `<p style="color:#a32d2d;font-size:13px;">${escapeHtml(state.loginError)}</p>` : ''}
+        <div class="actions-row">
+          <button id="loginSubmitBtn" ${state.loginBusy ? 'disabled' : ''}>${state.loginBusy ? busyLabel : (mode === 'login' ? 'Log in' : 'Create account')}</button>
+          <button type="button" class="ghost" id="loginToggleModeBtn">${mode === 'login' ? "Don't have an account? Register" : 'Already have an account? Log in'}</button>
+        </div>
       </div>
     </div>
   `;
@@ -578,15 +619,30 @@ function render(){
     return;
   }
   app.innerHTML = `
-    <h1>Test Case Hub</h1>
-    <p class="sub">Central, module-wise test case repository — independent of the Dashboard / API / App project split. ${DATA.modules.length} module(s) — pick one on the left to see its test cases. Signed in as ${escapeHtml((AUTH && (AUTH.displayName || AUTH.email)) || '')}.</p>
+    <div class="topbar">
+      <button type="button" class="hamburger-btn" id="hamburgerBtn" title="Modules menu">&#9776;</button>
+      <h1>Test Case Hub</h1>
+      <div class="profile-widget">
+        <div class="profile-info">
+          <div class="profile-name">${escapeHtml((AUTH && (AUTH.displayName || AUTH.email)) || '')}</div>
+          <div class="profile-email">${escapeHtml((AUTH && AUTH.email) || '')}</div>
+        </div>
+        <button type="button" id="logoutBtn">Logout</button>
+      </div>
+    </div>
+    <p class="sub">Central, module-wise test case repository — independent of the Dashboard / API / App project split. ${DATA.modules.length} module(s) — click the menu icon to pick one and see its test cases.</p>
     <div class="toolbar">
       <input type="search" id="searchBox" placeholder="Search by ID, title or tag" value="${escapeHtml(state.search)}" style="min-width:220px;">
-      <button type="button" class="ghost small" id="logoutBtn" style="margin-left:auto;">Log out</button>
     </div>
+    ${state.sidebarOpen ? `
+      <div class="sidebar-overlay-backdrop" id="sidebarBackdrop"></div>
+      <div class="sidebar-overlay" id="sidebarOverlay">
+        <div class="sidebar-overlay-head"><strong>Menu</strong><button type="button" class="ghost small" id="sidebarCloseBtn">✕</button></div>
+        ${renderSidebar()}
+      </div>
+    ` : ''}
     <div class="layout">
-      ${renderSidebar()}
-      <div class="main">
+      <div class="main" style="width:100%;">
         ${state.showAddModule ? renderAddModuleForm() : ''}
         ${state.showAddTaskLink ? renderAddTaskLinkForm(state.showAddTaskLink) : ''}
         ${state.showAddTestCase || state.editingId ? renderTestCaseForm() : ''}
@@ -1064,26 +1120,37 @@ function wireEvents(){
     DATA.priorities = PRIORITIES.slice(); DATA.statuses = STATUSES.slice();
     state.moduleFilter = 'all'; state.expandedId = null; state.historyCache = {};
     state.showLogin = true; state.loginMode = 'login'; state.loginError = null;
+    state.sidebarOpen = false;
     render();
+    showToast('Logged out.', 'success');
   });
 
+  const hamburgerBtn = document.getElementById('hamburgerBtn');
+  if(hamburgerBtn) hamburgerBtn.addEventListener('click', () => { state.sidebarOpen = !state.sidebarOpen; render(); });
+
+  const sidebarBackdrop = document.getElementById('sidebarBackdrop');
+  if(sidebarBackdrop) sidebarBackdrop.addEventListener('click', () => { state.sidebarOpen = false; render(); });
+
+  const sidebarCloseBtn = document.getElementById('sidebarCloseBtn');
+  if(sidebarCloseBtn) sidebarCloseBtn.addEventListener('click', () => { state.sidebarOpen = false; render(); });
+
   const menuAllModules = document.getElementById('menuAllModules');
-  if(menuAllModules) menuAllModules.addEventListener('click', () => { const next = !state.moduleListOpen; closeAllPanels(); state.moduleListOpen = next; render(); });
+  if(menuAllModules) menuAllModules.addEventListener('click', () => { const next = !state.moduleListOpen; closeAllPanels(); state.moduleListOpen = next; state.sidebarOpen = true; render(); });
 
   const moduleSearchBox = document.getElementById('moduleSearchBox');
   if(moduleSearchBox) moduleSearchBox.addEventListener('input', e => { state.moduleSearch = e.target.value; render(); });
 
   const menuAddModule = document.getElementById('menuAddModule');
-  if(menuAddModule) menuAddModule.addEventListener('click', () => { const next = !state.showAddModule; closeAllPanels(); state.showAddModule = next; render(); });
+  if(menuAddModule) menuAddModule.addEventListener('click', () => { const next = !state.showAddModule; closeAllPanels(); state.showAddModule = next; state.sidebarOpen = false; render(); });
 
   const menuAddTestCase = document.getElementById('menuAddTestCase');
-  if(menuAddTestCase) menuAddTestCase.addEventListener('click', () => { const next = !state.showAddTestCase; closeAllPanels(); state.showAddTestCase = next; render(); });
+  if(menuAddTestCase) menuAddTestCase.addEventListener('click', () => { const next = !state.showAddTestCase; closeAllPanels(); state.showAddTestCase = next; state.sidebarOpen = false; render(); });
 
   const menuDownload = document.getElementById('menuDownload');
-  if(menuDownload) menuDownload.addEventListener('click', () => { const next = !state.showExportPicker; closeAllPanels(); state.showExportPicker = next; render(); });
+  if(menuDownload) menuDownload.addEventListener('click', () => { const next = !state.showExportPicker; closeAllPanels(); state.showExportPicker = next; state.sidebarOpen = false; render(); });
 
   const menuImport = document.getElementById('menuImport');
-  if(menuImport) menuImport.addEventListener('click', () => { const next = !state.showImport; closeAllPanels(); state.showImport = next; render(); });
+  if(menuImport) menuImport.addEventListener('click', () => { const next = !state.showImport; closeAllPanels(); state.showImport = next; state.sidebarOpen = false; render(); });
 
   const importFile = document.getElementById('importFile');
   if(importFile) importFile.addEventListener('change', e => {
@@ -1097,10 +1164,10 @@ function wireEvents(){
   const importParseBtn = document.getElementById('importParseBtn');
   if(importParseBtn) importParseBtn.addEventListener('click', () => {
     const text = document.getElementById('importPasteArea').value;
-    if(!text || !text.trim()){ alert('Upload a file or paste rows first.'); return; }
+    if(!text || !text.trim()){ showToast('Upload a file or paste rows first.', 'error'); return; }
     const delim = detectDelimiter(text);
     const parsed = parseDelimited(text, delim);
-    if(parsed.length < 2){ alert('Could not find a header row plus at least one data row. Check the pasted/uploaded content.'); return; }
+    if(parsed.length < 2){ showToast('Could not find a header row plus at least one data row. Check the pasted/uploaded content.', 'error'); return; }
     state.importHeaders = parsed[0].map(h => String(h).trim());
     state.importRows = parsed.slice(1);
     const mapping = {};
@@ -1132,7 +1199,7 @@ function wireEvents(){
       state.importPreview = await processImportRows(false);
       state.importCommitted = false;
     } catch(err){
-      alert('Could not build the preview: ' + err.message);
+      showToast('Could not build the preview: ' + err.message, 'error');
     }
     render();
   });
@@ -1143,8 +1210,14 @@ function wireEvents(){
     try{
       state.importPreview = await processImportRows(true);
       state.importCommitted = true;
+      const p = state.importPreview;
+      if(p.failed.length){
+        showToast('Import finished: ' + p.success.length + ' added, ' + p.failed.length + ' failed.', 'error');
+      } else {
+        showToast('Import completed — ' + p.success.length + ' test case(s) added.', 'success');
+      }
     } catch(err){
-      alert('Import failed: ' + err.message);
+      showToast('Import failed: ' + err.message, 'error');
     }
     render();
   });
@@ -1180,7 +1253,7 @@ function wireEvents(){
     el.disabled = false;
   }));
 
-  document.querySelectorAll('[data-mod]').forEach(el => el.addEventListener('click', () => selectModule(el.dataset.mod)));
+  document.querySelectorAll('[data-mod]').forEach(el => el.addEventListener('click', () => { state.sidebarOpen = false; selectModule(el.dataset.mod); }));
   document.querySelectorAll('[data-layer]').forEach(el => el.addEventListener('click', () => {
     const val = el.dataset.layer;
     if(val === 'all'){ state.layerFilter = []; }
@@ -1243,8 +1316,9 @@ function wireEvents(){
       await loadModuleData(state.moduleFilter);
       await refreshModules();
       render();
+      showToast('Test case ' + id + ' marked deprecated.', 'success');
     } catch(err){
-      alert('Could not mark deprecated: ' + err.message);
+      showToast('Could not mark deprecated: ' + err.message, 'error');
       el.disabled = false;
     }
   }));
@@ -1263,7 +1337,7 @@ function wireEvents(){
   if(saveModuleBtn) saveModuleBtn.addEventListener('click', async () => {
     const name = document.getElementById('modName').value.trim();
     const code = document.getElementById('modCode').value.trim().toUpperCase();
-    if(!name || !code){ alert('Module name and code are required.'); return; }
+    if(!name || !code){ showToast('Module name and code are required.', 'error'); return; }
     saveModuleBtn.disabled = true;
     try{
       const created = await apiFetch('/api/modules', { method:'POST', body: JSON.stringify({
@@ -1275,8 +1349,9 @@ function wireEvents(){
       DATA.modules.push(normalizeModule(created));
       state.showAddModule = false;
       render();
+      showToast('Module "' + name + '" created.', 'success');
     } catch(err){
-      alert('Could not save module: ' + err.message);
+      showToast('Could not save module: ' + err.message, 'error');
       saveModuleBtn.disabled = false;
     }
   });
@@ -1286,7 +1361,7 @@ function wireEvents(){
   const saveLinkBtn = document.getElementById('saveLink');
   if(saveLinkBtn) saveLinkBtn.addEventListener('click', async () => {
     const taskId = document.getElementById('linkTaskId').value.trim();
-    if(!taskId){ alert('Task ID is required.'); return; }
+    if(!taskId){ showToast('Task ID is required.', 'error'); return; }
     const moduleId = state.showAddTaskLink;
     saveLinkBtn.disabled = true;
     try{
@@ -1300,8 +1375,9 @@ function wireEvents(){
       DATA.taskLinks.push(normalizeTaskLink(created));
       state.showAddTaskLink = null;
       render();
+      showToast('Linked task added.', 'success');
     } catch(err){
-      alert('Could not save linked task: ' + err.message);
+      showToast('Could not save linked task: ' + err.message, 'error');
       saveLinkBtn.disabled = false;
     }
   });
@@ -1367,7 +1443,7 @@ async function saveTestCase(){
 
   const missing = validateTestCasePayload(payload);
   if(missing.length){
-    alert('Cannot save — missing:\n\n' + missing.map(m => '• ' + m).join('\n'));
+    showToast('Cannot save — missing: ' + missing.join('; '), 'error');
     return;
   }
 
@@ -1382,7 +1458,9 @@ async function saveTestCase(){
   if(saveBtn) saveBtn.disabled = true;
 
   try{
+    let wasEdit = false;
     if(state.editingId){
+      wasEdit = true;
       apiPayload.historyComment = 'Edited via Test Case Hub';
       const updated = await apiFetch('/api/testcases/' + encodeURIComponent(state.editingId), { method:'PUT', body: JSON.stringify(apiPayload) });
       delete state.historyCache[state.editingId];
@@ -1396,8 +1474,9 @@ async function saveTestCase(){
       state.showAddTestCase = false;
     }
     render();
+    showToast(wasEdit ? 'Test case updated.' : 'Test case created.', 'success');
   } catch(err){
-    alert('Could not save test case: ' + err.message);
+    showToast('Could not save test case: ' + err.message, 'error');
     if(saveBtn) saveBtn.disabled = false;
   }
 }
@@ -1431,7 +1510,7 @@ async function readImportBatchSettingsFromDom(){
         mod = normalizeModule(created);
         DATA.modules.push(mod);
       } catch(err){
-        alert('Could not create module "' + newName + '": ' + err.message);
+        showToast('Could not create module "' + newName + '": ' + err.message, 'error');
         return false;
       }
     }
@@ -1443,8 +1522,8 @@ async function readImportBatchSettingsFromDom(){
   state.importLayer = document.getElementById('importLayer').value;
   state.importVerification = document.getElementById('importVerification').value;
 
-  if(!state.importModuleId){ alert('Pick an existing module or type a new module name for this batch first.'); return false; }
-  if(!state.importLayer || !state.importVerification){ alert('Pick a task area and verification type for this batch first.'); return false; }
+  if(!state.importModuleId){ showToast('Pick an existing module or type a new module name for this batch first.', 'error'); return false; }
+  if(!state.importLayer || !state.importVerification){ showToast('Pick a task area and verification type for this batch first.', 'error'); return false; }
   return true;
 }
 
@@ -1800,7 +1879,7 @@ async function doExport(moduleId, layers, format, verificationTypes){
     const query = moduleId ? ('?moduleId=' + encodeURIComponent(moduleId)) : '';
     tcs = (await apiFetch('/api/testcases' + query)).map(normalizeTestCase);
   } catch(err){
-    alert('Could not fetch test cases to export: ' + err.message);
+    showToast('Could not fetch test cases to export: ' + err.message, 'error');
     return;
   }
   if(layers) tcs = tcs.filter(tc => layers.includes(tc.layer));
@@ -1822,6 +1901,7 @@ async function doExport(moduleId, layers, format, verificationTypes){
     const csv = buildCsv(tcs);
     downloadFile('﻿' + csv, baseName + '.csv', 'text/csv;charset=utf-8;');
   }
+  showToast('Download started — ' + tcs.length + ' test case(s).', 'success');
 }
 
 bootstrap();
