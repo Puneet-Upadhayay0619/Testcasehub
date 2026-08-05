@@ -86,21 +86,18 @@
   .profile-widget .profile-info{ text-align:right; line-height:1.3; }
   .profile-widget .profile-name{ font-size:13px; font-weight:600; }
   .profile-widget .profile-email{ font-size:11px; opacity:0.85; }
+  .profile-role{ display:inline-block; background:rgba(255,255,255,0.25); border-radius:8px; padding:1px 7px; font-size:10px; font-weight:600; letter-spacing:0.3px; text-transform:uppercase; vertical-align:middle; }
   .profile-widget button{ background:#fff; color:var(--accent); border-color:#fff; padding:5px 10px; font-size:12px; }
-  .sidebar-overlay-backdrop{ position:fixed; inset:0; background:rgba(20,24,30,0.28); z-index:40; }
-  .sidebar-overlay{ position:fixed; top:0; left:0; height:100vh; width:270px; background:#fff; box-shadow:2px 0 16px rgba(0,0,0,0.18); z-index:50; overflow-y:auto; padding:14px; }
-  .sidebar-overlay-head{ display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; }
-  .sidebar-overlay-head strong{ font-size:14px; }
   .toast-container{ position:fixed; top:16px; right:16px; z-index:200; display:flex; flex-direction:column; gap:8px; }
   .toast{ min-width:220px; max-width:340px; padding:10px 14px; border-radius:8px; font-size:13px; color:#fff; box-shadow:0 4px 14px rgba(0,0,0,0.18); animation:toastIn 0.18s ease-out; }
   .toast-success{ background:var(--ok); }
   .toast-error{ background:var(--danger); }
   @keyframes toastIn{ from{ opacity:0; transform:translateY(-6px);} to{ opacity:1; transform:translateY(0);} }
-  .icon-rail{ position:fixed; top:0; left:0; height:100vh; width:56px; background:#fff; border-right:1px solid var(--border); display:flex; flex-direction:column; align-items:center; padding:10px 0; gap:6px; z-index:30; overflow-y:auto; }
-  .icon-rail-item{ width:38px; height:38px; min-height:38px; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:18px; cursor:pointer; color:var(--text-2); flex:none; }
-  .icon-rail-item:hover{ background:var(--bg-soft); }
-  .icon-rail-item.active{ background:var(--accent); color:#fff; }
-  .content-with-rail{ margin-left:56px; }
+  .sidebar{ transition:width 0.15s ease; }
+  .sidebar.collapsed{ width:56px; flex:0 0 56px; }
+  .sidebar.collapsed .sidebar-item{ justify-content:center; }
+  .sidebar.collapsed .item-text{ display:none; }
+  .item-icon{ font-size:16px; flex:none; }
 </style>
 </head>
 <body>
@@ -401,7 +398,7 @@ let state = {
   showExportPicker: false,
   moduleListOpen: false,
   moduleSearch: '',
-  sidebarOpen: false,
+  sidebarCollapsed: false,
   showImport: false,
   importStep: 1,
   importHeaders: [],
@@ -522,7 +519,7 @@ function renderLogin(){
       <p class="sub">Sign in to your team's Test Case Hub server — everyone points at the same server URL so test cases stay shared.</p>
       <div class="panel" style="max-width:420px;width:100%;">
         <h3>${mode === 'login' ? 'Log in' : 'Create an account'}</h3>
-        <div class="field"><label>API server URL</label><input type="text" id="loginApiBase" placeholder="https://your-server.example.com" value="${escapeHtml(state.apiBaseInput || '')}"></div>
+        <input type="hidden" id="loginApiBase" value="${escapeHtml(state.apiBaseInput || '')}">
         ${mode === 'register' ? `<div class="field"><label>Display name</label><input type="text" id="loginDisplayName" placeholder="e.g. Puneet"></div>` : ''}
         <div class="field"><label>Email</label><input type="text" id="loginEmail" placeholder="you@company.com"></div>
         <div class="field"><label>Password</label><input type="password" id="loginPassword"></div>
@@ -554,7 +551,7 @@ async function submitLogin(){
   const displayNameEl = document.getElementById('loginDisplayName');
   const displayName = displayNameEl ? displayNameEl.value.trim() : '';
 
-  if(!apiBase){ state.loginError = 'Enter the API server URL.'; render(); return; }
+  if(!apiBase){ state.loginError = 'Could not detect the server URL automatically — please reload the page.'; render(); return; }
   if(!email || !password){ state.loginError = 'Email and password are required.'; render(); return; }
   if(mode === 'register' && !displayName){ state.loginError = 'Display name is required to register.'; render(); return; }
 
@@ -567,7 +564,7 @@ async function submitLogin(){
     const path = mode === 'login' ? '/api/auth/login' : '/api/auth/register';
     const body = mode === 'login' ? { email, password } : { email, password, displayName };
     const res = await authRequest(apiBase, path, body);
-    saveAuth({ token: res.token, apiBase, email: res.email || email, displayName: res.displayName || displayName });
+    saveAuth({ token: res.token, apiBase, email: res.email || email, displayName: res.displayName || displayName, role: res.role });
     state.loginBusy = false;
     await bootstrap();
   } catch(err){
@@ -624,39 +621,30 @@ function render(){
     return;
   }
   app.innerHTML = `
-    ${renderIconRail()}
-    <div class="content-with-rail">
-      <div class="topbar">
-        <button type="button" class="hamburger-btn" id="hamburgerBtn" title="Modules menu">&#9776;</button>
-        <h1>Test Case Hub</h1>
-        <div class="profile-widget">
-          <div class="profile-info">
-            <div class="profile-name">${escapeHtml((AUTH && (AUTH.displayName || AUTH.email)) || '')}</div>
-            <div class="profile-email">${escapeHtml((AUTH && AUTH.email) || '')}</div>
-          </div>
-          <button type="button" id="logoutBtn">Logout</button>
+    <div class="topbar">
+      <button type="button" class="hamburger-btn" id="hamburgerBtn" title="Collapse/expand modules menu">&#9776;</button>
+      <h1>Test Case Hub</h1>
+      <div class="profile-widget">
+        <div class="profile-info">
+          <div class="profile-name">${escapeHtml((AUTH && (AUTH.displayName || AUTH.email)) || '')}${(AUTH && AUTH.role) ? ` <span class="profile-role">${escapeHtml(AUTH.role)}</span>` : ''}</div>
+          <div class="profile-email">${escapeHtml((AUTH && AUTH.email) || '')}</div>
         </div>
+        <button type="button" id="logoutBtn">Logout</button>
       </div>
-      <p class="sub">Central, module-wise test case repository — independent of the Dashboard / API / App project split. ${DATA.modules.length} module(s) — pick one from the icons on the left, or use the menu for more options.</p>
-      <div class="toolbar">
-        <input type="search" id="searchBox" placeholder="Search by ID, title or tag" value="${escapeHtml(state.search)}" style="min-width:220px;">
-      </div>
-      ${state.sidebarOpen ? `
-        <div class="sidebar-overlay-backdrop" id="sidebarBackdrop"></div>
-        <div class="sidebar-overlay" id="sidebarOverlay">
-          <div class="sidebar-overlay-head"><strong>Menu</strong><button type="button" class="ghost small" id="sidebarCloseBtn">✕</button></div>
-          ${renderSidebar()}
-        </div>
-      ` : ''}
-      <div class="layout">
-        <div class="main" style="width:100%;">
-          ${state.showAddModule ? renderAddModuleForm() : ''}
-          ${state.showAddTaskLink ? renderAddTaskLinkForm(state.showAddTaskLink) : ''}
-          ${state.showAddTestCase || state.editingId ? renderTestCaseForm() : ''}
-          ${state.showExportPicker ? renderExportPicker() : ''}
-          ${state.showImport ? renderImportForm() : ''}
-          ${isAnyPanelOpen() ? '' : renderMainArea()}
-        </div>
+    </div>
+    <p class="sub">Central, module-wise test case repository — independent of the Dashboard / API / App project split. ${DATA.modules.length} module(s) — pick one on the left to see its test cases.</p>
+    <div class="toolbar">
+      <input type="search" id="searchBox" placeholder="Search by ID, title or tag" value="${escapeHtml(state.search)}" style="min-width:220px;">
+    </div>
+    <div class="layout">
+      ${renderSidebar()}
+      <div class="main">
+        ${state.showAddModule ? renderAddModuleForm() : ''}
+        ${state.showAddTaskLink ? renderAddTaskLinkForm(state.showAddTaskLink) : ''}
+        ${state.showAddTestCase || state.editingId ? renderTestCaseForm() : ''}
+        ${state.showExportPicker ? renderExportPicker() : ''}
+        ${state.showImport ? renderImportForm() : ''}
+        ${isAnyPanelOpen() ? '' : renderMainArea()}
       </div>
     </div>
   `;
@@ -800,43 +788,36 @@ function iconForModule(m){
   return MODULE_ICONS[hash % MODULE_ICONS.length];
 }
 
-// Always-visible left icon rail — one icon per module plus an "all modules" entry, so switching
-// modules doesn't need opening the hamburger menu. The currently open module/sub-module stays
-// highlighted here until a different one is picked (state.moduleFilter only changes on click).
-function renderIconRail(){
-  const items = [`<div class="icon-rail-item ${state.moduleFilter==='all'?'active':''}" data-rail="all" title="All Module test cases">📋</div>`]
-    .concat(DATA.modules.map(m => `<div class="icon-rail-item ${state.moduleFilter===m.id?'active':''}" data-rail="${m.id}" title="${escapeHtml(m.name)} (${escapeHtml(m.code)})">${iconForModule(m)}</div>`));
-  return `<div class="icon-rail">${items.join('')}</div>`;
-}
-
+// Sidebar is always visible (FieldAssist-style) — every module is its own row with an icon,
+// so nothing needs an extra click to be found. The hamburger button only toggles between the
+// full icon+name view and a narrow icon-only view; it never hides the sidebar entirely. The
+// currently open module stays highlighted here until a different one is picked.
 function renderSidebar(){
+  const collapsed = !!state.sidebarCollapsed;
   const q = state.moduleSearch.trim().toLowerCase();
   const modules = DATA.modules.filter(m => !q || m.name.toLowerCase().includes(q) || m.code.toLowerCase().includes(q));
 
-  const moduleListHtml = state.moduleListOpen ? `
-    <div class="sidebar-sub">
-      <input type="search" id="moduleSearchBox" placeholder="Search module by name or code" value="${escapeHtml(state.moduleSearch)}">
-      <div class="module-list">
-        ${modules.length ? modules.map(m => `
-          <div class="sidebar-item sub-item ${state.moduleFilter===m.id?'active':''}" data-mod="${m.id}">
-            <span>${escapeHtml(m.name)}<br><small>${escapeHtml(m.code)} · ${escapeHtml(m.status)}</small></span>
-            <span class="count">${tcCountForModule(m.id)}</span>
-          </div>
-        `).join('') : '<div class="muted" style="padding:8px 4px;font-size:12px;">No modules match your search.</div>'}
-      </div>
+  const searchRow = collapsed ? '' : `<div class="sidebar-sub"><input type="search" id="moduleSearchBox" placeholder="Search module by name or code" value="${escapeHtml(state.moduleSearch)}"></div>`;
+
+  const moduleRows = modules.length ? modules.map(m => `
+    <div class="sidebar-item sub-item ${state.moduleFilter===m.id?'active':''}" data-mod="${m.id}" title="${escapeHtml(m.name)} (${escapeHtml(m.code)})">
+      <span class="item-icon">${iconForModule(m)}</span>
+      <span class="item-text">${escapeHtml(m.name)}<br><small>${escapeHtml(m.code)} · ${escapeHtml(m.status)}</small></span>
+      <span class="count item-text">${tcCountForModule(m.id)}</span>
     </div>
-  ` : '';
+  `).join('') : (collapsed ? '' : '<div class="muted item-text" style="padding:8px 4px;font-size:12px;">No modules match your search.</div>');
 
   return `
-    <div class="sidebar">
-      <div class="sidebar-item menu-item ${state.moduleListOpen?'active':''}" id="menuAllModules">
-        <span>All Module test cases</span><span class="chev">${state.moduleListOpen ? '▾' : '▸'}</span>
+    <div class="sidebar ${collapsed ? 'collapsed' : ''}">
+      <div class="sidebar-item menu-item ${state.moduleFilter==='all'?'active':''}" id="menuAllModules" title="All Module test cases">
+        <span class="item-icon">📋</span><span class="item-text">All Module test cases</span>
       </div>
-      ${moduleListHtml}
-      <div class="sidebar-item menu-item" id="menuAddModule"><span>+ Add module</span></div>
-      <div class="sidebar-item menu-item" id="menuAddTestCase"><span>+ Add test case</span></div>
-      <div class="sidebar-item menu-item" id="menuImport"><span>Import from spreadsheet</span></div>
-      <div class="sidebar-item menu-item" id="menuDownload"><span>Download test cases${exportScopeLabel()}</span></div>
+      ${searchRow}
+      <div class="module-list">${moduleRows}</div>
+      <div class="sidebar-item menu-item" id="menuAddModule" title="Add module"><span class="item-icon">➕</span><span class="item-text">Add module</span></div>
+      <div class="sidebar-item menu-item" id="menuAddTestCase" title="Add test case"><span class="item-icon">📝</span><span class="item-text">Add test case</span></div>
+      <div class="sidebar-item menu-item" id="menuImport" title="Import from spreadsheet"><span class="item-icon">📥</span><span class="item-text">Import from spreadsheet</span></div>
+      <div class="sidebar-item menu-item" id="menuDownload" title="Download test cases"><span class="item-icon">📤</span><span class="item-text">Download test cases${exportScopeLabel()}</span></div>
     </div>
   `;
 }
@@ -1139,13 +1120,6 @@ function showInlineAddBox(sel, addFn, promptLabel){
 }
 
 function wireEvents(){
-  document.querySelectorAll('[data-rail]').forEach(el => el.addEventListener('click', () => {
-    const val = el.dataset.rail;
-    closeAllPanels();
-    if(val === 'all'){ state.moduleFilter = 'all'; render(); }
-    else { selectModule(val); }
-  }));
-
   const searchBox = document.getElementById('searchBox');
   if(searchBox) searchBox.addEventListener('input', e => { state.search = e.target.value; render(); });
 
@@ -1156,37 +1130,30 @@ function wireEvents(){
     DATA.priorities = PRIORITIES.slice(); DATA.statuses = STATUSES.slice();
     state.moduleFilter = 'all'; state.expandedId = null; state.historyCache = {};
     state.showLogin = true; state.loginMode = 'login'; state.loginError = null;
-    state.sidebarOpen = false;
     render();
     showToast('Logged out.', 'success');
   });
 
   const hamburgerBtn = document.getElementById('hamburgerBtn');
-  if(hamburgerBtn) hamburgerBtn.addEventListener('click', () => { state.sidebarOpen = !state.sidebarOpen; render(); });
-
-  const sidebarBackdrop = document.getElementById('sidebarBackdrop');
-  if(sidebarBackdrop) sidebarBackdrop.addEventListener('click', () => { state.sidebarOpen = false; render(); });
-
-  const sidebarCloseBtn = document.getElementById('sidebarCloseBtn');
-  if(sidebarCloseBtn) sidebarCloseBtn.addEventListener('click', () => { state.sidebarOpen = false; render(); });
+  if(hamburgerBtn) hamburgerBtn.addEventListener('click', () => { state.sidebarCollapsed = !state.sidebarCollapsed; render(); });
 
   const menuAllModules = document.getElementById('menuAllModules');
-  if(menuAllModules) menuAllModules.addEventListener('click', () => { const next = !state.moduleListOpen; closeAllPanels(); state.moduleListOpen = next; state.sidebarOpen = true; render(); });
+  if(menuAllModules) menuAllModules.addEventListener('click', () => { closeAllPanels(); state.moduleFilter = 'all'; render(); });
 
   const moduleSearchBox = document.getElementById('moduleSearchBox');
   if(moduleSearchBox) moduleSearchBox.addEventListener('input', e => { state.moduleSearch = e.target.value; render(); });
 
   const menuAddModule = document.getElementById('menuAddModule');
-  if(menuAddModule) menuAddModule.addEventListener('click', () => { const next = !state.showAddModule; closeAllPanels(); state.showAddModule = next; state.sidebarOpen = false; render(); });
+  if(menuAddModule) menuAddModule.addEventListener('click', () => { const next = !state.showAddModule; closeAllPanels(); state.showAddModule = next; render(); });
 
   const menuAddTestCase = document.getElementById('menuAddTestCase');
-  if(menuAddTestCase) menuAddTestCase.addEventListener('click', () => { const next = !state.showAddTestCase; closeAllPanels(); state.showAddTestCase = next; state.sidebarOpen = false; render(); });
+  if(menuAddTestCase) menuAddTestCase.addEventListener('click', () => { const next = !state.showAddTestCase; closeAllPanels(); state.showAddTestCase = next; render(); });
 
   const menuDownload = document.getElementById('menuDownload');
-  if(menuDownload) menuDownload.addEventListener('click', () => { const next = !state.showExportPicker; closeAllPanels(); state.showExportPicker = next; state.sidebarOpen = false; render(); });
+  if(menuDownload) menuDownload.addEventListener('click', () => { const next = !state.showExportPicker; closeAllPanels(); state.showExportPicker = next; render(); });
 
   const menuImport = document.getElementById('menuImport');
-  if(menuImport) menuImport.addEventListener('click', () => { const next = !state.showImport; closeAllPanels(); state.showImport = next; state.sidebarOpen = false; render(); });
+  if(menuImport) menuImport.addEventListener('click', () => { const next = !state.showImport; closeAllPanels(); state.showImport = next; render(); });
 
   const importFile = document.getElementById('importFile');
   if(importFile) importFile.addEventListener('change', e => {
@@ -1289,7 +1256,7 @@ function wireEvents(){
     el.disabled = false;
   }));
 
-  document.querySelectorAll('[data-mod]').forEach(el => el.addEventListener('click', () => { state.sidebarOpen = false; selectModule(el.dataset.mod); }));
+  document.querySelectorAll('[data-mod]').forEach(el => el.addEventListener('click', () => selectModule(el.dataset.mod)));
   document.querySelectorAll('[data-layer]').forEach(el => el.addEventListener('click', () => {
     const val = el.dataset.layer;
     if(val === 'all'){ state.layerFilter = []; }
