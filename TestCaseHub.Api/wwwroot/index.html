@@ -96,6 +96,11 @@
   .toast-success{ background:var(--ok); }
   .toast-error{ background:var(--danger); }
   @keyframes toastIn{ from{ opacity:0; transform:translateY(-6px);} to{ opacity:1; transform:translateY(0);} }
+  .icon-rail{ position:fixed; top:0; left:0; height:100vh; width:56px; background:#fff; border-right:1px solid var(--border); display:flex; flex-direction:column; align-items:center; padding:10px 0; gap:6px; z-index:30; overflow-y:auto; }
+  .icon-rail-item{ width:38px; height:38px; min-height:38px; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:18px; cursor:pointer; color:var(--text-2); flex:none; }
+  .icon-rail-item:hover{ background:var(--bg-soft); }
+  .icon-rail-item.active{ background:var(--accent); color:#fff; }
+  .content-with-rail{ margin-left:56px; }
 </style>
 </head>
 <body>
@@ -619,36 +624,39 @@ function render(){
     return;
   }
   app.innerHTML = `
-    <div class="topbar">
-      <button type="button" class="hamburger-btn" id="hamburgerBtn" title="Modules menu">&#9776;</button>
-      <h1>Test Case Hub</h1>
-      <div class="profile-widget">
-        <div class="profile-info">
-          <div class="profile-name">${escapeHtml((AUTH && (AUTH.displayName || AUTH.email)) || '')}</div>
-          <div class="profile-email">${escapeHtml((AUTH && AUTH.email) || '')}</div>
+    ${renderIconRail()}
+    <div class="content-with-rail">
+      <div class="topbar">
+        <button type="button" class="hamburger-btn" id="hamburgerBtn" title="Modules menu">&#9776;</button>
+        <h1>Test Case Hub</h1>
+        <div class="profile-widget">
+          <div class="profile-info">
+            <div class="profile-name">${escapeHtml((AUTH && (AUTH.displayName || AUTH.email)) || '')}</div>
+            <div class="profile-email">${escapeHtml((AUTH && AUTH.email) || '')}</div>
+          </div>
+          <button type="button" id="logoutBtn">Logout</button>
         </div>
-        <button type="button" id="logoutBtn">Logout</button>
       </div>
-    </div>
-    <p class="sub">Central, module-wise test case repository — independent of the Dashboard / API / App project split. ${DATA.modules.length} module(s) — click the menu icon to pick one and see its test cases.</p>
-    <div class="toolbar">
-      <input type="search" id="searchBox" placeholder="Search by ID, title or tag" value="${escapeHtml(state.search)}" style="min-width:220px;">
-    </div>
-    ${state.sidebarOpen ? `
-      <div class="sidebar-overlay-backdrop" id="sidebarBackdrop"></div>
-      <div class="sidebar-overlay" id="sidebarOverlay">
-        <div class="sidebar-overlay-head"><strong>Menu</strong><button type="button" class="ghost small" id="sidebarCloseBtn">✕</button></div>
-        ${renderSidebar()}
+      <p class="sub">Central, module-wise test case repository — independent of the Dashboard / API / App project split. ${DATA.modules.length} module(s) — pick one from the icons on the left, or use the menu for more options.</p>
+      <div class="toolbar">
+        <input type="search" id="searchBox" placeholder="Search by ID, title or tag" value="${escapeHtml(state.search)}" style="min-width:220px;">
       </div>
-    ` : ''}
-    <div class="layout">
-      <div class="main" style="width:100%;">
-        ${state.showAddModule ? renderAddModuleForm() : ''}
-        ${state.showAddTaskLink ? renderAddTaskLinkForm(state.showAddTaskLink) : ''}
-        ${state.showAddTestCase || state.editingId ? renderTestCaseForm() : ''}
-        ${state.showExportPicker ? renderExportPicker() : ''}
-        ${state.showImport ? renderImportForm() : ''}
-        ${isAnyPanelOpen() ? '' : renderMainArea()}
+      ${state.sidebarOpen ? `
+        <div class="sidebar-overlay-backdrop" id="sidebarBackdrop"></div>
+        <div class="sidebar-overlay" id="sidebarOverlay">
+          <div class="sidebar-overlay-head"><strong>Menu</strong><button type="button" class="ghost small" id="sidebarCloseBtn">✕</button></div>
+          ${renderSidebar()}
+        </div>
+      ` : ''}
+      <div class="layout">
+        <div class="main" style="width:100%;">
+          ${state.showAddModule ? renderAddModuleForm() : ''}
+          ${state.showAddTaskLink ? renderAddTaskLinkForm(state.showAddTaskLink) : ''}
+          ${state.showAddTestCase || state.editingId ? renderTestCaseForm() : ''}
+          ${state.showExportPicker ? renderExportPicker() : ''}
+          ${state.showImport ? renderImportForm() : ''}
+          ${isAnyPanelOpen() ? '' : renderMainArea()}
+        </div>
       </div>
     </div>
   `;
@@ -778,6 +786,27 @@ function renderImportPreviewTable(){
       ${state.importCommitted ? `<button id="finishImportBtn">Done</button>` : `<button class="ghost" id="cancelImport">Cancel</button>`}
     </div>
   `;
+}
+
+// Deterministic, distinct-looking icon per module (modules are user-created free text, so
+// there's no fixed icon set like a normal app nav — hash the module's code/id into a fixed
+// emoji palette instead, so the same module always gets the same icon and different modules
+// usually look different at a glance).
+const MODULE_ICONS = ['📁','📦','🧩','🛠️','📊','🗂️','🎯','🚀','🔐','💳','🌐','📱','⚙️','🧪','📌','🧭'];
+function iconForModule(m){
+  const str = String((m && (m.code || m.id || m.name)) || '');
+  let hash = 0;
+  for(let i=0;i<str.length;i++){ hash = (hash * 31 + str.charCodeAt(i)) >>> 0; }
+  return MODULE_ICONS[hash % MODULE_ICONS.length];
+}
+
+// Always-visible left icon rail — one icon per module plus an "all modules" entry, so switching
+// modules doesn't need opening the hamburger menu. The currently open module/sub-module stays
+// highlighted here until a different one is picked (state.moduleFilter only changes on click).
+function renderIconRail(){
+  const items = [`<div class="icon-rail-item ${state.moduleFilter==='all'?'active':''}" data-rail="all" title="All Module test cases">📋</div>`]
+    .concat(DATA.modules.map(m => `<div class="icon-rail-item ${state.moduleFilter===m.id?'active':''}" data-rail="${m.id}" title="${escapeHtml(m.name)} (${escapeHtml(m.code)})">${iconForModule(m)}</div>`));
+  return `<div class="icon-rail">${items.join('')}</div>`;
 }
 
 function renderSidebar(){
@@ -1110,6 +1139,13 @@ function showInlineAddBox(sel, addFn, promptLabel){
 }
 
 function wireEvents(){
+  document.querySelectorAll('[data-rail]').forEach(el => el.addEventListener('click', () => {
+    const val = el.dataset.rail;
+    closeAllPanels();
+    if(val === 'all'){ state.moduleFilter = 'all'; render(); }
+    else { selectModule(val); }
+  }));
+
   const searchBox = document.getElementById('searchBox');
   if(searchBox) searchBox.addEventListener('input', e => { state.search = e.target.value; render(); });
 
