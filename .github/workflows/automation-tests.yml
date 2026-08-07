@@ -1,0 +1,58 @@
+# Fully automated TestCaseHub run (GitHub Actions version -- same steps as azure-pipelines.yml).
+# Save this file as .github/workflows/automation-tests.yml in your repo (GitHub only reads
+# workflows from that exact path, so it's kept in a separate folder here to avoid clashing
+# with any workflow files already in your repo).
+#
+# One-time setup:
+#   1. Run automation/setup-once.js locally as an Admin (see automation/README.md).
+#   2. In GitHub -> Settings -> Secrets and variables -> Actions, add repository secrets:
+#      TCH_BASE_URL, TCH_CI_BOT_EMAIL, TCH_CI_BOT_PASSWORD, TCH_API_KEY, TCH_ENVIRONMENT_ID,
+#      TCH_APP_API_BASE_URL, TCH_TARGET_APP_URL.
+#   3. (Optional) Configure AzureDevOps:OrgUrl/Project/Pat on the TestCaseHub deployment
+#      itself if you want auto bug-filing to create real work items.
+
+name: TestCaseHub automated tests
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '0 2 * * *' # nightly at 2am UTC -- remove if you only want on-push runs
+  workflow_dispatch: {}
+
+jobs:
+  automation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install automation dependencies
+        working-directory: automation
+        run: npm install
+
+      - name: Install Playwright browsers
+        working-directory: automation
+        run: npx playwright install --with-deps
+
+      - name: Run full automated test suite
+        working-directory: automation
+        env:
+          TCH_BASE_URL: ${{ secrets.TCH_BASE_URL }}
+          TCH_CI_BOT_EMAIL: ${{ secrets.TCH_CI_BOT_EMAIL }}
+          TCH_CI_BOT_PASSWORD: ${{ secrets.TCH_CI_BOT_PASSWORD }}
+          TCH_API_KEY: ${{ secrets.TCH_API_KEY }}
+          TCH_ENVIRONMENT_ID: ${{ secrets.TCH_ENVIRONMENT_ID }}
+          TCH_APP_API_BASE_URL: ${{ secrets.TCH_APP_API_BASE_URL }}
+          TCH_TARGET_APP_URL: ${{ secrets.TCH_TARGET_APP_URL }}
+        run: node run-automation.js
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: automation/playwright-report

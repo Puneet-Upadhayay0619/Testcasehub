@@ -1,0 +1,60 @@
+# Fully automated TestCaseHub run: creates a Test Run, runs Playwright + declarative API
+# checks, auto-files ADO bugs for failures, and fails the pipeline if anything Failed/Blocked.
+#
+# One-time setup before this pipeline will work:
+#   1. Run automation/setup-once.js locally as an Admin (see automation/README.md).
+#   2. In Azure DevOps -> Pipelines -> Library, create a Variable Group "TestCaseHub-CI"
+#      containing (mark password/key as secret): TCH_BASE_URL, TCH_CI_BOT_EMAIL,
+#      TCH_CI_BOT_PASSWORD, TCH_API_KEY, TCH_ENVIRONMENT_ID, TCH_APP_API_BASE_URL,
+#      TCH_TARGET_APP_URL.
+#   3. In this repo's Project Settings, set AzureDevOps:OrgUrl/Project/Pat (server-side, on
+#      the TestCaseHub deployment itself) if you want auto bug-filing to actually create work
+#      items -- otherwise that step just logs "not configured" and moves on.
+
+trigger:
+  branches:
+    include: [main]
+
+schedules:
+  - cron: '0 2 * * *' # nightly at 2am UTC -- remove this block if you only want on-push runs
+    displayName: Nightly regression
+    branches:
+      include: [main]
+    always: true
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  - group: TestCaseHub-CI
+
+steps:
+  - task: NodeTool@0
+    inputs:
+      versionSpec: '20.x'
+
+  - script: npm install
+    workingDirectory: automation
+    displayName: Install automation dependencies
+
+  - script: npx playwright install --with-deps
+    workingDirectory: automation
+    displayName: Install Playwright browsers
+
+  - script: node run-automation.js
+    workingDirectory: automation
+    displayName: Run full automated test suite
+    env:
+      TCH_BASE_URL: $(TCH_BASE_URL)
+      TCH_CI_BOT_EMAIL: $(TCH_CI_BOT_EMAIL)
+      TCH_CI_BOT_PASSWORD: $(TCH_CI_BOT_PASSWORD)
+      TCH_API_KEY: $(TCH_API_KEY)
+      TCH_ENVIRONMENT_ID: $(TCH_ENVIRONMENT_ID)
+      TCH_APP_API_BASE_URL: $(TCH_APP_API_BASE_URL)
+      TCH_TARGET_APP_URL: $(TCH_TARGET_APP_URL)
+
+  - task: PublishPipelineArtifact@1
+    condition: always()
+    inputs:
+      targetPath: automation/playwright-report
+      artifact: playwright-report
