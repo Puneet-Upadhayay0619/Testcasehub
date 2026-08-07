@@ -41,6 +41,10 @@ public static class Permissions
     // Linking an ADO task to a module is content-editing, same bar as everything else here.
     public static bool CanEditTaskLinks(this ClaimsPrincipal user) => user.IsAtLeast(Roles.Contributor);
 
+    // Creating a test suite (static or dynamic) is content-editing, same bar as everything
+    // else here — Viewer can still view/resolve suites, just not create them.
+    public static bool CanManageSuites(this ClaimsPrincipal user) => user.IsAtLeast(Roles.Contributor);
+
     // Agreed: only Lead/Admin can set or clear automationReady — this is the role half of the
     // flag-integrity control; the evidence-backed half (script ref / automation config must
     // actually exist) lands in Phase 6.

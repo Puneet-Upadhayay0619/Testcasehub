@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using TestCaseHub.Api.Dtos;
 using TestCaseHub.Api.Models;
+using TestCaseHub.Api.Services;
 using TestCaseHub.Api.Storage;
 
 namespace TestCaseHub.Api.Controllers;
@@ -27,6 +28,7 @@ public class SuitesController : ControllerBase
     [HttpPost("static")]
     public async Task<ActionResult<SuiteResponse>> CreateStatic(CreateStaticSuiteRequest req)
     {
+        if (!User.CanManageSuites()) return Forbid();
         if (string.IsNullOrWhiteSpace(req.Name)) return BadRequest("Suite name is required.");
         var suite = new TestSuite { Name = req.Name.Trim(), Description = req.Description ?? "", Kind = "Static", CreatedBy = CurrentUserDisplayName };
         suite.TestCaseIds = req.TestCaseIds ?? new();
@@ -42,6 +44,7 @@ public class SuitesController : ControllerBase
     [HttpPost("dynamic")]
     public async Task<ActionResult<SuiteResponse>> CreateDynamic(CreateDynamicSuiteRequest req)
     {
+        if (!User.CanManageSuites()) return Forbid();
         if (string.IsNullOrWhiteSpace(req.Name)) return BadRequest("Suite name is required.");
         var filter = new DynamicFilter(req.ModuleId, req.Layer, req.VerificationType, req.Status, req.Priority, req.Tag, req.Search);
         var suite = new TestSuite
