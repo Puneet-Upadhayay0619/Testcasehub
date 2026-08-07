@@ -2,8 +2,8 @@ using System.Text;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Infrastructure;   // <-- ADD THIS
-using Microsoft.EntityFrameworkCore.Storage;   // <-- ADD THIS LINE
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.IdentityModel.Tokens;
 using TestCaseHub.Api.Data;
 using TestCaseHub.Api.Services;
@@ -193,15 +193,15 @@ if (storageMode == "SqlServer")
     // Postgres is live, generate a fresh, Postgres-specific migration set at that point
     // (Database:Provider=Postgres when running `dotnet ef migrations add`).
     if (dbProvider == "SqlServer")
-    {
         db.Database.Migrate();
-    }
     else if (dbProvider == "Postgres")
     {
-        // EnsureCreated() no-ops when the target database already exists -- and on Supabase
-        // the "postgres" database always pre-exists, so it would silently skip creating any
-        // tables. Force table creation directly instead so a fresh Supabase project still
-        // gets its schema on first boot.
+        // EnsureCreated() is a no-op the moment the database itself already exists -- and on
+        // Supabase it always does (the project ships with its own auth/storage/etc. schemas
+        // already present), so EnsureCreated()'s "does the DB exist" check returns true and it
+        // silently skips creating our tables entirely. CreateTables() instead builds our schema
+        // unconditionally; the 42P07 (duplicate_table) catch makes this safe to run again on
+        // every redeploy once the tables already exist.
         try
         {
             db.GetService<IRelationalDatabaseCreator>().CreateTables();
@@ -212,9 +212,7 @@ if (storageMode == "SqlServer")
         }
     }
     else
-    {
         db.Database.EnsureCreated();
-    }
 }
 
 if (app.Environment.IsDevelopment())
@@ -241,5 +239,11 @@ app.MapGet("/health", async (IDataStore store) =>
     var moduleCount = (await store.GetModulesAsync()).Count;
     return Results.Ok(new { status = "ok", utc = DateTime.UtcNow, moduleCount });
 }).AllowAnonymous();
+
+// The password-reset email links (AuthController.ForgotPassword) point at
+// "<origin>/reset-password?token=...", but that's a client-side-only route -- there's no
+// actual /reset-password file or controller action. Without this, that link would just 404.
+// index.html itself checks the "token" query parameter and shows the reset form when present.
 app.MapFallbackToFile("index.html");
+
 app.Run();

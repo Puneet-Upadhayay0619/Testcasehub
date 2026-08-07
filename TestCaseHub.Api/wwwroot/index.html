@@ -82,7 +82,10 @@
   .topbar h1{ color:#fff; margin:0; font-size:18px; }
   .hamburger-btn{ background:transparent; border:1px solid rgba(255,255,255,0.45); color:#fff; font-size:16px; padding:4px 11px; border-radius:6px; cursor:pointer; line-height:1.2; }
   .hamburger-btn:hover{ background:rgba(255,255,255,0.15); }
-  .profile-widget{ margin-left:auto; display:flex; align-items:center; gap:10px; background:rgba(255,255,255,0.14); border-radius:8px; padding:6px 10px; }
+  .profile-widget{ display:flex; align-items:center; gap:10px; background:rgba(255,255,255,0.14); border-radius:8px; padding:6px 10px; }
+  .bell-btn{ margin-left:auto; position:relative; background:transparent; border:1px solid rgba(255,255,255,0.45); color:#fff; font-size:15px; padding:5px 9px; border-radius:6px; cursor:pointer; line-height:1; }
+  .bell-btn:hover{ background:rgba(255,255,255,0.15); }
+  .bell-badge{ position:absolute; top:-6px; right:-6px; background:var(--danger); color:#fff; border-radius:9px; font-size:10px; font-weight:700; padding:1px 5px; min-width:14px; }
   .profile-widget .profile-info{ text-align:right; line-height:1.3; }
   .profile-widget .profile-name{ font-size:13px; font-weight:600; }
   .profile-widget .profile-email{ font-size:11px; opacity:0.85; }
@@ -376,7 +379,7 @@ function fmtDate(iso){ if(!iso) return ''; const d = new Date(iso); return d.toL
 // DATA now mirrors whatever the server most recently returned — it is a cache for rendering,
 // not the source of truth. bootstrap() fills it after login; module selection, history expand,
 // AI-generate and import all refresh the relevant slice after they write to the server.
-let DATA = { modules: [], taskLinks: [], testCases: [], history: [], priorities: PRIORITIES.slice(), statuses: STATUSES.slice(), users: [], invites: [] };
+let DATA = { modules: [], taskLinks: [], testCases: [], history: [], priorities: PRIORITIES.slice(), statuses: STATUSES.slice(), users: [], invites: [], notifications: [], suites: [], releases: [], testRuns: [], coverage: [], trend: [], apiKeys: [], environments: [], duplicates: [] };
 
 let state = {
   showLogin: true,
@@ -424,7 +427,40 @@ let state = {
   // login form, regardless of whether someone happens to already be logged in on this browser.
   resetToken: (typeof location !== 'undefined' ? new URLSearchParams(location.search).get('token') : null) || '',
   resetSuccess: false,
-  forgotSubmitted: false
+  forgotSubmitted: false,
+  showNotifications: false,
+  notificationsLoading: false,
+  unreadCount: 0,
+  showSuites: false,
+  suitesLoading: false,
+  showCreateStaticSuite: false,
+  showCreateDynamicSuite: false,
+  showReleases: false,
+  releasesLoading: false,
+  showCreateRelease: false,
+  releaseDetailId: null,
+  releaseReportCache: {},
+  showTestRuns: false,
+  testRunsLoading: false,
+  showCreateTestRun: false,
+  testRunDetailId: null,
+  testRunResultsCache: {},
+  testRunRollupCache: {},
+  showReports: false,
+  reportsLoading: false,
+  showApiKeys: false,
+  apiKeysLoading: false,
+  showEnvironments: false,
+  environmentsLoading: false,
+  showCreateEnvironment: false,
+  showDuplicates: false,
+  duplicatesLoading: false,
+  showBulkEdit: false,
+  commentsCache: {},
+  diffCache: {},
+  suiteResolveCache: {},
+  recordResultRunId: null,
+  bugBusyResultId: null
 };
 
 function closeAllPanels(){
@@ -447,6 +483,22 @@ function closeAllPanels(){
   state.importCommitted = false;
   state.showManageUsers = false;
   state.showInviteLinks = false;
+  state.showNotifications = false;
+  state.showSuites = false;
+  state.showCreateStaticSuite = false;
+  state.showCreateDynamicSuite = false;
+  state.showReleases = false;
+  state.showCreateRelease = false;
+  state.releaseDetailId = null;
+  state.showTestRuns = false;
+  state.showCreateTestRun = false;
+  state.testRunDetailId = null;
+  state.showReports = false;
+  state.showApiKeys = false;
+  state.showEnvironments = false;
+  state.showCreateEnvironment = false;
+  state.showDuplicates = false;
+  state.showBulkEdit = false;
 }
 
 function moduleById(id){ return DATA.modules.find(m => m.id === String(id)); }
@@ -768,6 +820,7 @@ function render(){
     <div class="topbar">
       <button type="button" class="hamburger-btn" id="hamburgerBtn" title="Collapse/expand modules menu">&#9776;</button>
       <h1>Test Case Hub</h1>
+      <button type="button" class="bell-btn" id="bellBtn" title="Notifications">🔔${state.unreadCount > 0 ? `<span class="bell-badge">${state.unreadCount}</span>` : ''}</button>
       <div class="profile-widget">
         <div class="profile-info">
           <div class="profile-name">${escapeHtml((AUTH && (AUTH.displayName || AUTH.email)) || '')}${(AUTH && AUTH.role) ? ` <span class="profile-role">${escapeHtml(AUTH.role)}</span>` : ''}</div>
@@ -790,6 +843,15 @@ function render(){
         ${state.showImport ? renderImportForm() : ''}
         ${state.showManageUsers ? renderManageUsers() : ''}
         ${state.showInviteLinks ? renderInviteLinks() : ''}
+        ${state.showNotifications ? renderNotifications() : ''}
+        ${state.showSuites ? renderSuites() : ''}
+        ${state.showReleases ? renderReleases() : ''}
+        ${state.showTestRuns ? renderTestRuns() : ''}
+        ${state.showReports ? renderReports() : ''}
+        ${state.showApiKeys ? renderApiKeys() : ''}
+        ${state.showEnvironments ? renderEnvironments() : ''}
+        ${state.showDuplicates ? renderDuplicates() : ''}
+        ${state.showBulkEdit ? renderBulkEdit() : ''}
         ${isAnyPanelOpen() ? '' : renderMainArea()}
       </div>
     </div>
@@ -805,7 +867,9 @@ function renderMainArea(){
 }
 
 function isAnyPanelOpen(){
-  return state.showAddModule || state.showAddTestCase || !!state.editingId || !!state.showAddTaskLink || state.showExportPicker || state.showImport || state.showManageUsers || state.showInviteLinks;
+  return state.showAddModule || state.showAddTestCase || !!state.editingId || !!state.showAddTaskLink || state.showExportPicker || state.showImport ||
+    state.showManageUsers || state.showInviteLinks || state.showNotifications || state.showSuites || state.showReleases || state.showTestRuns || state.showReports ||
+    state.showApiKeys || state.showEnvironments || state.showDuplicates || state.showBulkEdit;
 }
 
 // ---------- Admin: Manage Users ----------
@@ -953,6 +1017,626 @@ function renderInviteLinks(){
     </div>
   `;
 }
+
+
+// ---------------- Notifications ----------------
+async function loadNotifications(){
+  state.notificationsLoading = true; render();
+  try{
+    DATA.notifications = await apiFetch('/api/notifications');
+    state.unreadCount = DATA.notifications.filter(n => !n.read).length;
+  } catch(err){ showToast('Could not load notifications: ' + err.message, 'error'); }
+  state.notificationsLoading = false; render();
+}
+async function refreshUnreadCount(){
+  try{
+    const unread = await apiFetch('/api/notifications?unreadOnly=true');
+    state.unreadCount = (unread || []).length;
+    render();
+  } catch(err){ /* silent -- not critical */ }
+}
+async function markNotificationRead(id){
+  try{
+    await apiFetch('/api/notifications/' + id + '/read', { method:'POST' });
+    DATA.notifications = DATA.notifications.map(n => n.id === id ? Object.assign({}, n, { read: true }) : n);
+    state.unreadCount = DATA.notifications.filter(n => !n.read).length;
+    render();
+  } catch(err){ showToast('Could not mark notification read: ' + err.message, 'error'); }
+}
+async function markAllNotificationsRead(){
+  const unread = (DATA.notifications || []).filter(n => !n.read);
+  for(const n of unread){
+    try{ await apiFetch('/api/notifications/' + n.id + '/read', { method:'POST' }); } catch(err){}
+  }
+  DATA.notifications = (DATA.notifications || []).map(n => Object.assign({}, n, { read: true }));
+  state.unreadCount = 0;
+  render();
+  showToast('All notifications marked read.', 'success');
+}
+function renderNotifications(){
+  if(state.notificationsLoading) return `<div class="panel"><h3>Notifications</h3><p class="sub" style="margin-top:-6px;">Loading…</p></div>`;
+  const rows = (DATA.notifications || []).map(n => `
+    <div class="sidebar-item" style="cursor:default;${n.read?'':'background:var(--bg-soft, #f3f6fb);'}">
+      <span>
+        <strong>${escapeHtml(n.type)}</strong><br>
+        <span style="font-size:12px;">${escapeHtml(n.message)}</span><br>
+        <small class="muted">${fmtDate(n.createdAt)}</small>
+      </span>
+      ${!n.read ? `<button type="button" class="small ghost" data-mark-read="${n.id}">Mark read</button>` : ''}
+    </div>
+  `).join('');
+  return `
+    <div class="panel">
+      <h3>Notifications</h3>
+      <div class="actions-row" style="margin-top:-6px;">
+        <button type="button" class="ghost small" id="markAllReadBtn">Mark all read</button>
+      </div>
+      <div style="margin-top:10px;">${rows || '<div class="empty">No notifications.</div>'}</div>
+      <div class="actions-row"><button type="button" class="ghost" id="closeNotifications">Close</button></div>
+    </div>
+  `;
+}
+
+// ---------------- Test Suites ----------------
+async function loadSuites(){
+  state.suitesLoading = true; render();
+  try{ DATA.suites = await apiFetch('/api/suites'); } catch(err){ showToast('Could not load suites: ' + err.message, 'error'); }
+  state.suitesLoading = false; render();
+}
+async function createStaticSuite(name, description, idsCsv){
+  const testCaseIds = idsCsv.split(',').map(s=>s.trim()).filter(Boolean);
+  try{
+    const created = await apiFetch('/api/suites/static', { method:'POST', body: JSON.stringify({ name, description, testCaseIds }) });
+    DATA.suites = [created].concat(DATA.suites || []);
+    state.showCreateStaticSuite = false;
+    render();
+    showToast('Suite "' + created.name + '" created.', 'success');
+  } catch(err){ showToast('Could not create suite: ' + err.message, 'error'); }
+}
+async function createDynamicSuite(name, description, filter){
+  try{
+    const created = await apiFetch('/api/suites/dynamic', { method:'POST', body: JSON.stringify(Object.assign({ name, description }, filter)) });
+    DATA.suites = [created].concat(DATA.suites || []);
+    state.showCreateDynamicSuite = false;
+    render();
+    showToast('Suite "' + created.name + '" created.', 'success');
+  } catch(err){ showToast('Could not create suite: ' + err.message, 'error'); }
+}
+async function toggleResolveSuite(id){
+  if(state.suiteResolveCache[id]){ delete state.suiteResolveCache[id]; render(); return; }
+  try{
+    state.suiteResolveCache[id] = await apiFetch('/api/suites/' + id + '/resolve');
+    render();
+  } catch(err){ showToast('Could not resolve suite: ' + err.message, 'error'); }
+}
+function renderSuites(){
+  if(state.suitesLoading) return `<div class="panel"><h3>Test Suites</h3><p class="sub" style="margin-top:-6px;">Loading…</p></div>`;
+  const rows = (DATA.suites || []).map(s => `
+    <tr>
+      <td>${escapeHtml(s.name)}<br><small class="muted">${escapeHtml(s.description||'')}</small></td>
+      <td>${escapeHtml(s.kind)}</td>
+      <td>${escapeHtml(s.createdBy)}</td>
+      <td><button type="button" class="small ghost" data-resolve-suite="${s.id}">${state.suiteResolveCache[s.id] ? 'Hide' : 'View cases'}</button></td>
+    </tr>
+    ${state.suiteResolveCache[s.id] ? `<tr><td colspan="4"><div class="muted" style="font-size:12px;">${
+      state.suiteResolveCache[s.id].length
+        ? state.suiteResolveCache[s.id].map(tc => escapeHtml(tc.id) + ' — ' + escapeHtml(tc.title)).join('<br>')
+        : 'No test cases match this suite right now.'
+    }</div></td></tr>` : ''}
+  `).join('');
+
+  return `
+    <div class="panel">
+      <h3>Test Suites</h3>
+      <p class="sub" style="margin-top:-6px;">Named groups of test cases — Static (hand-picked IDs) or Dynamic (a saved filter, re-evaluated every time).</p>
+      ${canEditContent() ? `
+      <div class="actions-row">
+        <button type="button" class="secondary small" id="toggleCreateStaticSuite">${state.showCreateStaticSuite ? 'Cancel' : '+ Static suite'}</button>
+        <button type="button" class="secondary small" id="toggleCreateDynamicSuite">${state.showCreateDynamicSuite ? 'Cancel' : '+ Dynamic suite'}</button>
+      </div>` : ''}
+      ${state.showCreateStaticSuite ? `
+        <div class="field"><label>Name</label><input type="text" id="staticSuiteName"></div>
+        <div class="field"><label>Description</label><input type="text" id="staticSuiteDesc"></div>
+        <div class="field"><label>Test case IDs (comma-separated)</label><input type="text" id="staticSuiteIds" placeholder="TC-RETAIL-DSH-001, TC-RETAIL-DSH-002"></div>
+        <div class="actions-row"><button type="button" id="saveStaticSuiteBtn">Create static suite</button></div>
+      ` : ''}
+      ${state.showCreateDynamicSuite ? `
+        <div class="field"><label>Name</label><input type="text" id="dynSuiteName"></div>
+        <div class="field"><label>Description</label><input type="text" id="dynSuiteDesc"></div>
+        <div class="grid2">
+          <div class="field"><label>Module (optional)</label><select id="dynSuiteModule"><option value="">Any</option>${DATA.modules.map(m=>`<option value="${m.id}">${escapeHtml(m.name)}</option>`).join('')}</select></div>
+          <div class="field"><label>Task area (optional)</label><select id="dynSuiteLayer"><option value="">Any</option>${LAYERS.map(l=>`<option value="${l.v}">${l.label}</option>`).join('')}</select></div>
+          <div class="field"><label>Verification type (optional)</label><select id="dynSuiteVerification"><option value="">Any</option>${VERIFICATION_TYPES.map(v=>`<option value="${v.v}">${v.label}</option>`).join('')}</select></div>
+          <div class="field"><label>Status (optional)</label><select id="dynSuiteStatus"><option value="">Any</option>${getAllStatuses().map(s=>`<option value="${s}">${s}</option>`).join('')}</select></div>
+          <div class="field"><label>Priority (optional)</label><select id="dynSuitePriority"><option value="">Any</option>${getAllPriorities().map(p=>`<option value="${p}">${p}</option>`).join('')}</select></div>
+          <div class="field"><label>Tag (optional)</label><input type="text" id="dynSuiteTag"></div>
+        </div>
+        <div class="actions-row"><button type="button" id="saveDynamicSuiteBtn">Create dynamic suite</button></div>
+      ` : ''}
+      <table style="margin-top:14px;">
+        <thead><tr><th>Suite</th><th>Kind</th><th>Created by</th><th></th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="4" class="empty">No suites yet.</td></tr>'}</tbody>
+      </table>
+      <div class="actions-row"><button type="button" class="ghost" id="closeSuites">Close</button></div>
+    </div>
+  `;
+}
+
+// ---------------- Releases ----------------
+async function loadReleases(){
+  state.releasesLoading = true; render();
+  try{ DATA.releases = await apiFetch('/api/releases'); } catch(err){ showToast('Could not load releases: ' + err.message, 'error'); }
+  state.releasesLoading = false; render();
+}
+async function createRelease(name, version){
+  try{
+    const created = await apiFetch('/api/releases', { method:'POST', body: JSON.stringify({ name, version }) });
+    DATA.releases = [created].concat(DATA.releases || []);
+    state.showCreateRelease = false;
+    render();
+    showToast('Release "' + created.name + '" created.', 'success');
+  } catch(err){ showToast('Could not create release: ' + err.message, 'error'); }
+}
+async function transitionRelease(id, newStatus, comment){
+  try{
+    const updated = await apiFetch('/api/releases/' + id + '/transition', { method:'POST', body: JSON.stringify({ newStatus, comment }) });
+    DATA.releases = DATA.releases.map(r => r.id === id ? updated : r);
+    render();
+    showToast('Release moved to ' + updated.status + '.', 'success');
+  } catch(err){ showToast('Could not transition release: ' + err.message, 'error'); }
+}
+async function toggleReleaseReport(id){
+  if(state.releaseDetailId === id){ state.releaseDetailId = null; render(); return; }
+  state.releaseDetailId = id;
+  render();
+  try{
+    const report = await apiFetch('/api/releases/' + id + '/readiness-report');
+    state.releaseReportCache[id] = report;
+    render();
+  } catch(err){ showToast('Could not load readiness report: ' + err.message, 'error'); }
+}
+const RELEASE_TRANSITIONS = {
+  Draft: ['InTesting'],
+  InTesting: ['ReadyForSignoff', 'Draft'],
+  ReadyForSignoff: ['Approved', 'Rejected', 'InTesting'],
+  Rejected: ['InTesting'],
+  Approved: []
+};
+function renderReleases(){
+  if(state.releasesLoading) return `<div class="panel"><h3>Releases</h3><p class="sub" style="margin-top:-6px;">Loading…</p></div>`;
+  const rows = (DATA.releases || []).map(r => {
+    const next = RELEASE_TRANSITIONS[r.status] || [];
+    const report = state.releaseReportCache[r.id];
+    return `
+    <tr>
+      <td>${escapeHtml(r.name)} <small class="muted">${escapeHtml(r.version||'')}</small></td>
+      <td><span class="badge b-active">${escapeHtml(r.status)}</span></td>
+      <td>${escapeHtml(r.createdBy)} · ${fmtDate(r.createdAt)}</td>
+      <td>
+        <button type="button" class="small ghost" data-toggle-report="${r.id}">${state.releaseDetailId===r.id?'Hide report':'Readiness report'}</button>
+        ${canEditContent() ? next.map(ns => `<button type="button" class="small ghost" data-transition="${r.id}" data-newstatus="${ns}">${ns}</button>`).join(' ') : ''}
+      </td>
+    </tr>
+    ${state.releaseDetailId === r.id ? `<tr><td colspan="4">${
+      !report ? '<span class="muted">Loading report…</span>' :
+      `<div style="font-size:12px;">
+        Pass rate: <strong>${report.rollup.passRatePercent}%</strong> (${report.rollup.passed}/${report.rollup.totalCases} passed, ${report.rollup.failed} failed, ${report.rollup.blocked} blocked, ${report.rollup.skipped} skipped, ${report.rollup.notRun} not run)
+        ${report.failingOrBlocked.length ? '<br><br><strong>Failing/blocked:</strong><br>' + report.failingOrBlocked.map(f => escapeHtml(f.testCaseId) + ' — ' + escapeHtml(f.status)).join('<br>') : ''}
+      </div>`
+    }</td></tr>` : ''}
+  `; }).join('');
+
+  return `
+    <div class="panel">
+      <h3>Releases</h3>
+      ${canEditContent() ? `<div class="actions-row" style="margin-top:-6px;"><button type="button" class="secondary small" id="toggleCreateRelease">${state.showCreateRelease?'Cancel':'+ Create release'}</button></div>` : ''}
+      ${state.showCreateRelease ? `
+        <div class="grid2">
+          <div class="field"><label>Name</label><input type="text" id="releaseName" placeholder="e.g. Sprint 24 Release"></div>
+          <div class="field"><label>Version</label><input type="text" id="releaseVersion" placeholder="e.g. 2.4.0"></div>
+        </div>
+        <div class="actions-row"><button type="button" id="saveReleaseBtn">Create release</button></div>
+      ` : ''}
+      <table style="margin-top:14px;">
+        <thead><tr><th>Release</th><th>Status</th><th>Created</th><th></th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="4" class="empty">No releases yet.</td></tr>'}</tbody>
+      </table>
+      <div class="actions-row"><button type="button" class="ghost" id="closeReleases">Close</button></div>
+    </div>
+  `;
+}
+
+// ---------------- Test Runs ----------------
+async function loadTestRuns(){
+  state.testRunsLoading = true; render();
+  try{
+    const [runs, releases, suites, environments] = await Promise.all([
+      apiFetch('/api/testruns'),
+      apiFetch('/api/releases').catch(()=>[]),
+      apiFetch('/api/suites').catch(()=>[]),
+      apiFetch('/api/environments').catch(()=>[])
+    ]);
+    DATA.testRuns = runs;
+    DATA.releases = releases;
+    DATA.suites = suites;
+    DATA.environments = environments;
+  } catch(err){ showToast('Could not load test runs: ' + err.message, 'error'); }
+  state.testRunsLoading = false; render();
+}
+async function createTestRun(payload){
+  try{
+    const created = await apiFetch('/api/testruns', { method:'POST', body: JSON.stringify(payload) });
+    DATA.testRuns = [created].concat(DATA.testRuns || []);
+    state.showCreateTestRun = false;
+    render();
+    showToast('Test run "' + created.name + '" created.', 'success');
+  } catch(err){ showToast('Could not create test run: ' + err.message, 'error'); }
+}
+async function toggleTestRunDetail(id){
+  if(state.testRunDetailId === id){ state.testRunDetailId = null; render(); return; }
+  state.testRunDetailId = id;
+  render();
+  await refreshTestRunDetail(id);
+}
+async function refreshTestRunDetail(id){
+  try{
+    const [results, rollup] = await Promise.all([
+      apiFetch('/api/testruns/' + id + '/results'),
+      apiFetch('/api/testruns/' + id + '/rollup')
+    ]);
+    state.testRunResultsCache[id] = results;
+    state.testRunRollupCache[id] = rollup;
+    render();
+  } catch(err){ showToast('Could not load test run details: ' + err.message, 'error'); }
+}
+async function recordManualResult(runId, testCaseId, platform, status, notes){
+  try{
+    await apiFetch('/api/testruns/' + runId + '/results/manual', { method:'POST', body: JSON.stringify({ testCaseId, platform: platform || null, status, notes: notes || null }) });
+    showToast('Result recorded.', 'success');
+    state.recordResultRunId = null;
+    await refreshTestRunDetail(runId);
+  } catch(err){ showToast('Could not record result: ' + err.message, 'error'); }
+}
+async function createBugFromResult(runId, resultId){
+  state.bugBusyResultId = resultId; render();
+  try{
+    const res = await apiFetch('/api/testruns/' + runId + '/results/' + resultId + '/create-bug', { method:'POST' });
+    if(res.success){ showToast('Bug filed: ' + res.workItemId, 'success'); }
+    else { showToast('Could not file bug: ' + (res.error||'unknown error'), 'error'); }
+    const results = await apiFetch('/api/testruns/' + runId + '/results');
+    state.testRunResultsCache[runId] = results;
+  } catch(err){ showToast('Could not file bug: ' + err.message, 'error'); }
+  state.bugBusyResultId = null; render();
+}
+function renderTestRuns(){
+  if(state.testRunsLoading) return `<div class="panel"><h3>Test Runs</h3><p class="sub" style="margin-top:-6px;">Loading…</p></div>`;
+  const rows = (DATA.testRuns || []).map(r => {
+    const results = state.testRunResultsCache[r.id];
+    const rollup = state.testRunRollupCache[r.id];
+    return `
+    <tr>
+      <td>${escapeHtml(r.name)}</td>
+      <td>${escapeHtml(r.targetEnvironment||'')}</td>
+      <td>${escapeHtml(r.createdBy)} · ${fmtDate(r.createdAt)}</td>
+      <td>
+        <button type="button" class="small ghost" data-toggle-run="${r.id}">${state.testRunDetailId===r.id?'Hide':'View'}</button>
+        ${canEditContent() ? `<button type="button" class="small ghost" data-record-result="${r.id}">Record result</button>` : ''}
+      </td>
+    </tr>
+    ${state.testRunDetailId === r.id ? `<tr><td colspan="4">
+      ${!rollup ? '<span class="muted">Loading…</span>' : `
+        <div style="font-size:12px;margin-bottom:8px;">Pass rate: <strong>${rollup.passRatePercent}%</strong> (${rollup.passed}/${rollup.totalCases} passed, ${rollup.failed} failed, ${rollup.blocked} blocked, ${rollup.skipped} skipped, ${rollup.notRun} not run)</div>
+        ${state.recordResultRunId === r.id ? `
+          <div class="grid2" style="margin-bottom:8px;">
+            <div class="field"><label>Test case ID</label><input type="text" id="recResultTcId_${r.id}" placeholder="TC-RETAIL-DSH-001"></div>
+            <div class="field"><label>Platform (optional)</label><input type="text" id="recResultPlatform_${r.id}" placeholder="Android / iOS / Web"></div>
+            <div class="field"><label>Status</label><select id="recResultStatus_${r.id}"><option>Pass</option><option>Fail</option><option>Blocked</option><option>Skipped</option><option>NotRun</option></select></div>
+            <div class="field"><label>Notes (optional)</label><input type="text" id="recResultNotes_${r.id}"></div>
+          </div>
+          <div class="actions-row" style="margin-bottom:8px;"><button type="button" class="small" data-save-result="${r.id}">Save result</button></div>
+        ` : ''}
+        <table><thead><tr><th>Test case</th><th>Status</th><th>By</th><th>When</th><th></th></tr></thead><tbody>
+        ${(results||[]).map(res => `
+          <tr>
+            <td>${escapeHtml(res.testCaseId)}</td>
+            <td><span class="${badgeClass('s', res.status)}">${escapeHtml(res.status)}</span></td>
+            <td>${escapeHtml(res.executedBy)}</td>
+            <td>${fmtDate(res.executedAt)}</td>
+            <td>${(res.status==='Fail'||res.status==='Blocked') && canEditContent() ? (res.bugWorkItemId ? 'Bug: ' + escapeHtml(res.bugWorkItemId) : `<button type="button" class="small ghost" data-create-bug="${r.id}" data-result-id="${res.id}" ${state.bugBusyResultId===res.id?'disabled':''}>${state.bugBusyResultId===res.id?'Filing…':'File bug'}</button>`) : ''}</td>
+          </tr>
+        `).join('') || '<tr><td colspan="5" class="empty">No results yet.</td></tr>'}
+        </tbody></table>
+      `}
+    </td></tr>` : ''}
+  `; }).join('');
+
+  return `
+    <div class="panel">
+      <h3>Test Runs</h3>
+      ${canEditContent() ? `<div class="actions-row" style="margin-top:-6px;"><button type="button" class="secondary small" id="toggleCreateTestRun">${state.showCreateTestRun?'Cancel':'+ Create test run'}</button></div>` : ''}
+      ${state.showCreateTestRun ? `
+        <div class="grid2">
+          <div class="field"><label>Name</label><input type="text" id="runName" placeholder="e.g. Sprint 24 Regression"></div>
+          <div class="field"><label>Target environment (label)</label><input type="text" id="runTargetEnv" placeholder="e.g. Staging"></div>
+          <div class="field"><label>Release (optional)</label><select id="runRelease"><option value="">None</option>${(DATA.releases||[]).map(r=>`<option value="${r.id}">${escapeHtml(r.name)}</option>`).join('')}</select></div>
+          <div class="field"><label>Suite (optional)</label><select id="runSuite"><option value="">None</option>${(DATA.suites||[]).map(s=>`<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('')}</select></div>
+          <div class="field"><label>Environment Target (optional)</label><select id="runEnvTarget"><option value="">None</option>${(DATA.environments||[]).map(e=>`<option value="${e.id}">${escapeHtml(e.name)} (${escapeHtml(e.environmentType)})</option>`).join('')}</select></div>
+        </div>
+        <div class="actions-row"><button type="button" id="saveTestRunBtn">Create test run</button></div>
+      ` : ''}
+      <table style="margin-top:14px;">
+        <thead><tr><th>Run</th><th>Environment</th><th>Created</th><th></th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="4" class="empty">No test runs yet.</td></tr>'}</tbody>
+      </table>
+      <div class="actions-row"><button type="button" class="ghost" id="closeTestRuns">Close</button></div>
+    </div>
+  `;
+}
+
+// ---------------- Reports ----------------
+async function loadReports(){
+  state.reportsLoading = true; render();
+  try{
+    const [coverage, trend] = await Promise.all([
+      apiFetch('/api/reports/coverage'),
+      apiFetch('/api/reports/trend')
+    ]);
+    DATA.coverage = coverage;
+    DATA.trend = trend;
+  } catch(err){ showToast('Could not load reports: ' + err.message, 'error'); }
+  state.reportsLoading = false; render();
+}
+function renderReports(){
+  if(state.reportsLoading) return `<div class="panel"><h3>Reports</h3><p class="sub" style="margin-top:-6px;">Loading…</p></div>`;
+  const covRows = (DATA.coverage||[]).map(c => `<tr><td>${escapeHtml(c.moduleName)}</td><td>${c.casesWithAtLeastOnePass}/${c.totalCases}</td><td>${c.coveragePercent}%</td></tr>`).join('');
+  const trendRows = (DATA.trend||[]).map(t => `<tr><td>${escapeHtml(t.releaseName)}</td><td>${t.passRatePercent}%</td><td>${t.totalResults}</td></tr>`).join('');
+  return `
+    <div class="panel">
+      <h3>Coverage by module</h3>
+      <p class="sub" style="margin-top:-6px;">% of (non-deprecated) test cases that have EVER recorded at least one Pass.</p>
+      <table><thead><tr><th>Module</th><th>Passed at least once</th><th>Coverage</th></tr></thead>
+      <tbody>${covRows || '<tr><td colspan="3" class="empty">No data yet.</td></tr>'}</tbody></table>
+    </div>
+    <div class="panel">
+      <h3>Release trend</h3>
+      <p class="sub" style="margin-top:-6px;">Pass rate per release, oldest first.</p>
+      <table><thead><tr><th>Release</th><th>Pass rate</th><th>Total results</th></tr></thead>
+      <tbody>${trendRows || '<tr><td colspan="3" class="empty">No data yet.</td></tr>'}</tbody></table>
+      <div class="actions-row"><button type="button" class="ghost" id="closeReports">Close</button></div>
+    </div>
+  `;
+}
+
+// ---------------- API Keys ----------------
+async function loadApiKeys(){
+  state.apiKeysLoading = true; render();
+  try{ DATA.apiKeys = await apiFetch('/api/apikeys'); } catch(err){ showToast('Could not load API keys: ' + err.message, 'error'); }
+  state.apiKeysLoading = false; render();
+}
+async function createApiKey(name, scope){
+  try{
+    const issued = await apiFetch('/api/apikeys', { method:'POST', body: JSON.stringify({ name, scope: scope || 'ReportResults' }) });
+    await loadApiKeys();
+    window.prompt('Copy this API key now (shown only once):', issued.rawKey);
+    showToast('API key "' + issued.name + '" created.', 'success');
+  } catch(err){ showToast('Could not create API key: ' + err.message, 'error'); }
+}
+async function revokeApiKey(id){
+  try{
+    const updated = await apiFetch('/api/apikeys/' + id + '/revoke', { method:'POST' });
+    DATA.apiKeys = DATA.apiKeys.map(k => k.id === id ? updated : k);
+    render();
+    showToast('API key revoked.', 'success');
+  } catch(err){ showToast('Could not revoke API key: ' + err.message, 'error'); }
+}
+function renderApiKeys(){
+  if(state.apiKeysLoading) return `<div class="panel"><h3>API Keys</h3><p class="sub" style="margin-top:-6px;">Loading…</p></div>`;
+  const rows = (DATA.apiKeys||[]).map(k => `
+    <tr>
+      <td>${escapeHtml(k.name)}</td>
+      <td>${escapeHtml(k.scope)}</td>
+      <td>${k.revoked ? '<span class="badge b-deprecated">Revoked</span>' : '<span class="badge b-active">Active</span>'}</td>
+      <td>${escapeHtml(k.createdBy)}</td>
+      <td>${k.revoked ? '' : `<button type="button" class="small ghost" data-revoke-apikey="${k.id}">Revoke</button>`}</td>
+    </tr>
+  `).join('');
+  return `
+    <div class="panel">
+      <h3>API Keys</h3>
+      <p class="sub" style="margin-top:-6px;">CI/pipeline service-account keys — used with the X-Api-Key header to post automated test results.</p>
+      <div class="grid2">
+        <div class="field"><label>Name</label><input type="text" id="apiKeyName" placeholder="e.g. Azure DevOps CI"></div>
+        <div class="field"><label>Scope</label><input type="text" id="apiKeyScope" placeholder="ReportResults" value="ReportResults"></div>
+      </div>
+      <div class="actions-row"><button type="button" id="createApiKeyBtn">Generate key</button></div>
+      <table style="margin-top:14px;">
+        <thead><tr><th>Name</th><th>Scope</th><th>Status</th><th>Created by</th><th></th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="5" class="empty">No API keys yet.</td></tr>'}</tbody>
+      </table>
+      <div class="actions-row"><button type="button" class="ghost" id="closeApiKeys">Close</button></div>
+    </div>
+  `;
+}
+
+// ---------------- Environment Targets ----------------
+async function loadEnvironments(){
+  state.environmentsLoading = true; render();
+  try{ DATA.environments = await apiFetch('/api/environments'); } catch(err){ showToast('Could not load environments: ' + err.message, 'error'); }
+  state.environmentsLoading = false; render();
+}
+async function createEnvironment(payload){
+  try{
+    const created = await apiFetch('/api/environments', { method:'POST', body: JSON.stringify(payload) });
+    DATA.environments = [created].concat(DATA.environments || []);
+    state.showCreateEnvironment = false;
+    render();
+    showToast('Environment "' + created.name + '" created.', 'success');
+  } catch(err){ showToast('Could not create environment: ' + err.message, 'error'); }
+}
+function renderEnvironments(){
+  if(state.environmentsLoading) return `<div class="panel"><h3>Environment Targets</h3><p class="sub" style="margin-top:-6px;">Loading…</p></div>`;
+  const rows = (DATA.environments||[]).map(e => `
+    <tr>
+      <td>${escapeHtml(e.name)}<br><small class="muted">${escapeHtml(e.tenant||'')}</small></td>
+      <td><span class="${e.environmentType==='Production'?'badge b-p1':'badge b-active'}">${escapeHtml(e.environmentType)}</span></td>
+      <td>${escapeHtml(e.appBaseUrl||'')}</td>
+      <td>${e.hasMasterDbConnection?'Master ✓ ':''}${e.hasTransactionDbConnection?'Txn ✓ ':''}${e.hasReportDbConnection?'Report ✓':''}</td>
+    </tr>
+  `).join('');
+  return `
+    <div class="panel">
+      <h3>Environment Targets</h3>
+      <p class="sub" style="margin-top:-6px;">Staging/Production configs — connection strings are encrypted at rest and never shown again after saving.</p>
+      ${canEditContent() ? `<div class="actions-row"><button type="button" class="secondary small" id="toggleCreateEnvironment">${state.showCreateEnvironment?'Cancel':'+ Add environment'}</button></div>` : ''}
+      ${state.showCreateEnvironment ? `
+        <div class="grid2">
+          <div class="field"><label>Name</label><input type="text" id="envName" placeholder="e.g. Staging - Mars"></div>
+          <div class="field"><label>Tenant</label><input type="text" id="envTenant" placeholder="e.g. mars"></div>
+          <div class="field"><label>Type</label><select id="envType"><option>Staging</option><option>Production</option></select></div>
+          <div class="field"><label>App URL</label><input type="text" id="envAppUrl" placeholder="https://..."></div>
+          <div class="field"><label>Dashboard URL</label><input type="text" id="envDashUrl" placeholder="https://..."></div>
+          <div class="field"><label>App API URL</label><input type="text" id="envApiUrl" placeholder="https://..."></div>
+          <div class="field"><label>Master DB connection string (optional)</label><input type="text" id="envMasterDb"></div>
+          <div class="field"><label>Transaction DB connection string (optional)</label><input type="text" id="envTxnDb"></div>
+          <div class="field"><label>Report DB connection string (optional)</label><input type="text" id="envReportDb"></div>
+        </div>
+        <div class="field"><label><input type="checkbox" id="envRequiresCleanup"> Requires test-data cleanup after runs</label></div>
+        <div class="actions-row"><button type="button" id="saveEnvironmentBtn">Save environment</button></div>
+      ` : ''}
+      <table style="margin-top:14px;">
+        <thead><tr><th>Name</th><th>Type</th><th>App URL</th><th>DB connections</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="4" class="empty">No environments yet.</td></tr>'}</tbody>
+      </table>
+      <div class="actions-row"><button type="button" class="ghost" id="closeEnvironments">Close</button></div>
+    </div>
+  `;
+}
+
+// ---------------- Duplicate detection ----------------
+async function loadDuplicates(){
+  state.duplicatesLoading = true; render();
+  try{
+    const q = state.moduleFilter !== 'all' ? ('?moduleId=' + encodeURIComponent(state.moduleFilter)) : '';
+    DATA.duplicates = await apiFetch('/api/testcases/duplicates' + q);
+  } catch(err){ showToast('Could not check duplicates: ' + err.message, 'error'); }
+  state.duplicatesLoading = false; render();
+}
+function renderDuplicates(){
+  if(state.duplicatesLoading) return `<div class="panel"><h3>Possible duplicates</h3><p class="sub" style="margin-top:-6px;">Checking…</p></div>`;
+  const groups = DATA.duplicates || [];
+  return `
+    <div class="panel">
+      <h3>Possible duplicate test cases</h3>
+      <p class="sub" style="margin-top:-6px;">${state.moduleFilter !== 'all' ? 'Scoped to the currently selected module.' : 'Across all modules.'} Groups of test cases with very similar titles.</p>
+      ${groups.length ? groups.map(g => `
+        <div class="panel" style="background:#fff;">
+          ${g.cases.map(tc => `<div>${escapeHtml(tc.id)} — ${escapeHtml(tc.title)} <span class="muted">(${escapeHtml(tc.status)})</span></div>`).join('')}
+        </div>
+      `).join('') : '<div class="empty">No likely duplicates found.</div>'}
+      <div class="actions-row"><button type="button" class="ghost" id="closeDuplicates">Close</button></div>
+    </div>
+  `;
+}
+
+// ---------------- Bulk edit ----------------
+async function submitBulkEdit(idsCsv, priority, status, addTagsCsv, removeTagsCsv){
+  const ids = idsCsv.split(',').map(s=>s.trim()).filter(Boolean);
+  if(!ids.length){ showToast('Enter at least one test case ID.', 'error'); return; }
+  try{
+    const result = await apiFetch('/api/testcases/bulk-edit', { method:'POST', body: JSON.stringify({
+      ids, priority: priority || null, status: status || null,
+      addTags: addTagsCsv ? addTagsCsv.split(',').map(s=>s.trim()).filter(Boolean) : null,
+      removeTags: removeTagsCsv ? removeTagsCsv.split(',').map(s=>s.trim()).filter(Boolean) : null
+    }) });
+    showToast('Bulk edit done — ' + result.updated.length + ' updated' + (result.notFound.length ? ', ' + result.notFound.length + ' not found' : '') + '.', result.notFound.length ? 'error' : 'success');
+    if(state.moduleFilter !== 'all') await loadModuleData(state.moduleFilter);
+    state.showBulkEdit = false;
+    render();
+  } catch(err){ showToast('Could not bulk edit: ' + err.message, 'error'); }
+}
+function renderBulkEdit(){
+  return `
+    <div class="panel">
+      <h3>Bulk edit test cases</h3>
+      <p class="sub" style="margin-top:-6px;">Leave a field blank to leave it unchanged for all selected cases.</p>
+      <div class="field"><label>Test case IDs (comma-separated)</label><textarea id="bulkIds" style="min-height:60px;" placeholder="TC-RETAIL-DSH-001, TC-RETAIL-DSH-002"></textarea></div>
+      <div class="grid2">
+        <div class="field"><label>Set Priority (optional)</label><select id="bulkPriority"><option value="">Leave unchanged</option>${getAllPriorities().map(p=>`<option value="${p}">${p}</option>`).join('')}</select></div>
+        <div class="field"><label>Set Status (optional)</label><select id="bulkStatus"><option value="">Leave unchanged</option>${getAllStatuses().map(s=>`<option value="${s}">${s}</option>`).join('')}</select></div>
+        <div class="field"><label>Add tags (comma-separated, optional)</label><input type="text" id="bulkAddTags"></div>
+        <div class="field"><label>Remove tags (comma-separated, optional)</label><input type="text" id="bulkRemoveTags"></div>
+      </div>
+      <div class="actions-row">
+        <button type="button" id="applyBulkEditBtn">Apply</button>
+        <button type="button" class="ghost" id="closeBulkEdit">Cancel</button>
+      </div>
+    </div>
+  `;
+}
+
+// ---------------- Comments (on test case detail) ----------------
+async function loadComments(testCaseId){
+  try{
+    state.commentsCache[testCaseId] = await apiFetch('/api/testcases/' + encodeURIComponent(testCaseId) + '/comments');
+    render();
+  } catch(err){ showToast('Could not load comments: ' + err.message, 'error'); }
+}
+async function addComment(testCaseId, body){
+  if(!body || !body.trim()){ showToast('Comment cannot be empty.', 'error'); return; }
+  try{
+    const created = await apiFetch('/api/testcases/' + encodeURIComponent(testCaseId) + '/comments', { method:'POST', body: JSON.stringify({ body }) });
+    state.commentsCache[testCaseId] = (state.commentsCache[testCaseId] || []).concat([created]);
+    render();
+    showToast('Comment added.', 'success');
+  } catch(err){ showToast('Could not add comment: ' + err.message, 'error'); }
+}
+async function deleteComment(testCaseId, commentId){
+  if(!confirm('Delete this comment?')) return;
+  try{
+    await apiFetch('/api/testcases/' + encodeURIComponent(testCaseId) + '/comments/' + commentId, { method:'DELETE' });
+    state.commentsCache[testCaseId] = (state.commentsCache[testCaseId] || []).filter(c => c.id !== commentId);
+    render();
+    showToast('Comment deleted.', 'success');
+  } catch(err){ showToast('Could not delete comment: ' + err.message, 'error'); }
+}
+function renderComments(testCaseId){
+  const comments = state.commentsCache[testCaseId];
+  if(comments === undefined){
+    return `<div class="muted">Loading comments…</div>`;
+  }
+  const rows = comments.filter(c => !c.deleted).map(c => `
+    <div class="hist-item">
+      <strong>${escapeHtml(c.authorDisplayName)}</strong> · ${fmtDate(c.createdAt)}<br>
+      ${escapeHtml(c.body)}
+      ${(AUTH && (AUTH.email === c.authorEmail || AUTH.role === 'Lead' || AUTH.role === 'Admin')) ? `<button type="button" class="small ghost" data-delete-comment="${testCaseId}" data-comment-id="${c.id}" style="margin-left:8px;">Delete</button>` : ''}
+    </div>
+  `).join('');
+  return `
+    ${rows || '<div class="muted">No comments yet.</div>'}
+    <div class="field" style="margin-top:8px;">
+      <textarea id="newCommentBody_${testCaseId}" placeholder="Add a comment…" style="min-height:44px;"></textarea>
+    </div>
+    <button type="button" class="small" data-add-comment="${testCaseId}">Post comment</button>
+  `;
+}
+
+// ---------------- History diff ----------------
+async function toggleHistoryDiff(testCaseId, historyId){
+  const key = testCaseId + ':' + historyId;
+  if(state.diffCache[key]){ delete state.diffCache[key]; render(); return; }
+  try{
+    state.diffCache[key] = await apiFetch('/api/testcases/' + encodeURIComponent(testCaseId) + '/history/' + historyId + '/diff');
+    render();
+  } catch(err){ showToast('Could not load diff: ' + err.message, 'error'); }
+}
+function renderHistoryDiff(testCaseId, historyId){
+  const key = testCaseId + ':' + historyId;
+  const diffs = state.diffCache[key];
+  if(!diffs) return '';
+  if(!diffs.length) return '<div class="muted" style="font-size:12px;margin-left:12px;">No field-level differences recorded.</div>';
+  return `<div style="font-size:12px;margin-left:12px;margin-top:4px;">${diffs.map(d => `<div><strong>${escapeHtml(d.field)}</strong>: ${escapeHtml(d.oldValue===null||d.oldValue===undefined?'—':d.oldValue)} → ${escapeHtml(d.newValue===null||d.newValue===undefined?'—':d.newValue)}</div>`).join('')}</div>`;
+}
+
 
 function renderExportPicker(){
   const modOptions = `<option value="all">All modules</option>` + DATA.modules.map(m => `<option value="${m.id}" ${state.moduleFilter===m.id?'selected':''}>${escapeHtml(m.name)} (${escapeHtml(m.code)})</option>`).join('');
@@ -1110,8 +1794,16 @@ function renderSidebar(){
       ${canEditContent() ? `<div class="sidebar-item menu-item" id="menuAddTestCase" title="Add test case"><span class="item-icon">📝</span><span class="item-text">Add test case</span></div>` : ''}
       ${canEditContent() ? `<div class="sidebar-item menu-item" id="menuImport" title="Import from spreadsheet"><span class="item-icon">📥</span><span class="item-text">Import from spreadsheet</span></div>` : ''}
       <div class="sidebar-item menu-item" id="menuDownload" title="Download test cases"><span class="item-icon">📤</span><span class="item-text">Download test cases${exportScopeLabel()}</span></div>
+      ${canEditContent() ? `<div class="sidebar-item menu-item" id="menuDuplicates" title="Find duplicate test cases"><span class="item-icon">🔎</span><span class="item-text">Find duplicates</span></div>` : ''}
+      ${canEditContent() ? `<div class="sidebar-item menu-item" id="menuBulkEdit" title="Bulk edit test cases"><span class="item-icon">🧮</span><span class="item-text">Bulk edit</span></div>` : ''}
+      <div class="sidebar-item menu-item" id="menuSuites" title="Test Suites"><span class="item-icon">🗂️</span><span class="item-text">Test Suites</span></div>
+      <div class="sidebar-item menu-item" id="menuReleases" title="Releases"><span class="item-icon">🚀</span><span class="item-text">Releases</span></div>
+      <div class="sidebar-item menu-item" id="menuTestRuns" title="Test Runs"><span class="item-icon">▶️</span><span class="item-text">Test Runs</span></div>
+      <div class="sidebar-item menu-item" id="menuReports" title="Reports"><span class="item-icon">📊</span><span class="item-text">Reports</span></div>
       ${(AUTH && AUTH.role === 'Admin') ? `<div class="sidebar-item menu-item" id="menuManageUsers" title="Manage Users"><span class="item-icon">🛡️</span><span class="item-text">Manage Users</span></div>` : ''}
       ${(AUTH && AUTH.role === 'Admin') ? `<div class="sidebar-item menu-item" id="menuInviteLinks" title="Invite Links"><span class="item-icon">🎟️</span><span class="item-text">Invite Links</span></div>` : ''}
+      ${(AUTH && AUTH.role === 'Admin') ? `<div class="sidebar-item menu-item" id="menuApiKeys" title="API Keys"><span class="item-icon">🔑</span><span class="item-text">API Keys</span></div>` : ''}
+      ${(AUTH && AUTH.role === 'Admin') ? `<div class="sidebar-item menu-item" id="menuEnvironments" title="Environment Targets"><span class="item-icon">🌐</span><span class="item-text">Environment Targets</span></div>` : ''}
     </div>
   `;
 }
@@ -1199,7 +1891,7 @@ function renderDetail(tc){
   const linksHtml = links.length ? links.map(l => `<span class="linked-task">${escapeHtml(l.adoProject)} #${escapeHtml(l.adoTaskId)} · ${escapeHtml(l.adoTaskTitle)} <span class="muted">(${escapeHtml(l.layer)})</span></span>`).join('') : '<span class="muted">No linked tasks yet.</span>';
   const histHtml = state.historyCache[tc.id] === undefined
     ? '<div class="muted">Loading history…</div>'
-    : (hist.length ? hist.map(h => `<div class="hist-item"><strong>${h.changeType}</strong> by ${escapeHtml(h.changedBy)} · ${fmtDate(h.changedAt)}${h.comment ? ' — ' + escapeHtml(h.comment) : ''}</div>`).join('') : '<div class="muted">No history.</div>');
+    : (hist.length ? hist.map(h => `<div class="hist-item"><strong>${h.changeType}</strong> by ${escapeHtml(h.changedBy)} · ${fmtDate(h.changedAt)}${h.comment ? ' — ' + escapeHtml(h.comment) : ''} <button type="button" class="small ghost" data-toggle-diff="${tc.id}" data-history-id="${h.id}">${state.diffCache[tc.id + ':' + h.id] ? 'Hide diff' : 'View diff'}</button>${renderHistoryDiff(tc.id, h.id)}</div>`).join('') : '<div class="muted">No history.</div>');
 
   return `
     <div class="detail">
@@ -1219,6 +1911,8 @@ function renderDetail(tc){
       <div>${tc.automationReady ? 'Marked automation-ready.' : 'Not yet marked automation-ready.'} ${tc.automationScriptRef ? 'Script: ' + escapeHtml(tc.automationScriptRef) : '<span class="muted">No script linked yet.</span>'}</div>
       <h4>History</h4>
       <div>${histHtml}</div>
+      <h4>Comments</h4>
+      <div>${renderComments(tc.id)}</div>
       <div class="actions-row">
         ${canEditContent() ? `<button class="small secondary" data-edit="${tc.id}">Edit</button>` : ''}
         ${canEditContent() && tc.status !== 'Deprecated' ? `<button class="small ghost" data-deprecate="${tc.id}">Mark deprecated</button>` : ''}
@@ -1507,6 +2201,269 @@ function wireEvents(){
     }
   }));
 
+
+  // ---------------- Notifications ----------------
+  const bellBtn = document.getElementById('bellBtn');
+  if(bellBtn) bellBtn.addEventListener('click', () => {
+    const next = !state.showNotifications;
+    closeAllPanels();
+    state.showNotifications = next;
+    render();
+    if(next) loadNotifications();
+  });
+  const closeNotifications = document.getElementById('closeNotifications');
+  if(closeNotifications) closeNotifications.addEventListener('click', () => { state.showNotifications = false; render(); });
+  const markAllReadBtn = document.getElementById('markAllReadBtn');
+  if(markAllReadBtn) markAllReadBtn.addEventListener('click', () => markAllNotificationsRead());
+  document.querySelectorAll('[data-mark-read]').forEach(el => el.addEventListener('click', () => {
+    markNotificationRead(Number(el.dataset.markRead));
+  }));
+
+  // ---------------- Test Suites ----------------
+  const menuSuites = document.getElementById('menuSuites');
+  if(menuSuites) menuSuites.addEventListener('click', () => {
+    const next = !state.showSuites;
+    closeAllPanels();
+    state.showSuites = next;
+    render();
+    if(next) loadSuites();
+  });
+  const closeSuites = document.getElementById('closeSuites');
+  if(closeSuites) closeSuites.addEventListener('click', () => { state.showSuites = false; render(); });
+  const toggleCreateStaticSuite = document.getElementById('toggleCreateStaticSuite');
+  if(toggleCreateStaticSuite) toggleCreateStaticSuite.addEventListener('click', () => { state.showCreateStaticSuite = !state.showCreateStaticSuite; state.showCreateDynamicSuite = false; render(); });
+  const toggleCreateDynamicSuite = document.getElementById('toggleCreateDynamicSuite');
+  if(toggleCreateDynamicSuite) toggleCreateDynamicSuite.addEventListener('click', () => { state.showCreateDynamicSuite = !state.showCreateDynamicSuite; state.showCreateStaticSuite = false; render(); });
+  const saveStaticSuiteBtn = document.getElementById('saveStaticSuiteBtn');
+  if(saveStaticSuiteBtn) saveStaticSuiteBtn.addEventListener('click', () => {
+    const name = document.getElementById('staticSuiteName').value.trim();
+    const description = document.getElementById('staticSuiteDesc').value.trim();
+    const ids = document.getElementById('staticSuiteIds').value.trim();
+    if(!name){ showToast('Suite name is required.', 'error'); return; }
+    createStaticSuite(name, description, ids);
+  });
+  const saveDynamicSuiteBtn = document.getElementById('saveDynamicSuiteBtn');
+  if(saveDynamicSuiteBtn) saveDynamicSuiteBtn.addEventListener('click', () => {
+    const name = document.getElementById('dynSuiteName').value.trim();
+    const description = document.getElementById('dynSuiteDesc').value.trim();
+    if(!name){ showToast('Suite name is required.', 'error'); return; }
+    const moduleId = document.getElementById('dynSuiteModule').value;
+    const filter = {
+      moduleId: moduleId ? Number(moduleId) : null,
+      layer: document.getElementById('dynSuiteLayer').value || null,
+      verificationType: document.getElementById('dynSuiteVerification').value || null,
+      status: document.getElementById('dynSuiteStatus').value || null,
+      priority: document.getElementById('dynSuitePriority').value || null,
+      tag: document.getElementById('dynSuiteTag').value.trim() || null
+    };
+    createDynamicSuite(name, description, filter);
+  });
+  document.querySelectorAll('[data-resolve-suite]').forEach(el => el.addEventListener('click', () => {
+    toggleResolveSuite(Number(el.dataset.resolveSuite));
+  }));
+
+  // ---------------- Releases ----------------
+  const menuReleases = document.getElementById('menuReleases');
+  if(menuReleases) menuReleases.addEventListener('click', () => {
+    const next = !state.showReleases;
+    closeAllPanels();
+    state.showReleases = next;
+    render();
+    if(next) loadReleases();
+  });
+  const closeReleases = document.getElementById('closeReleases');
+  if(closeReleases) closeReleases.addEventListener('click', () => { state.showReleases = false; render(); });
+  const toggleCreateRelease = document.getElementById('toggleCreateRelease');
+  if(toggleCreateRelease) toggleCreateRelease.addEventListener('click', () => { state.showCreateRelease = !state.showCreateRelease; render(); });
+  const saveReleaseBtn = document.getElementById('saveReleaseBtn');
+  if(saveReleaseBtn) saveReleaseBtn.addEventListener('click', () => {
+    const name = document.getElementById('releaseName').value.trim();
+    const version = document.getElementById('releaseVersion').value.trim();
+    if(!name){ showToast('Release name is required.', 'error'); return; }
+    createRelease(name, version);
+  });
+  document.querySelectorAll('[data-toggle-report]').forEach(el => el.addEventListener('click', () => {
+    toggleReleaseReport(Number(el.dataset.toggleReport));
+  }));
+  document.querySelectorAll('[data-transition]').forEach(el => el.addEventListener('click', () => {
+    const id = Number(el.dataset.transition);
+    const newStatus = el.dataset.newstatus;
+    let comment = null;
+    if(newStatus === 'Approved' || newStatus === 'Rejected'){
+      comment = window.prompt('A comment is required to ' + (newStatus === 'Approved' ? 'approve' : 'reject') + ' this release:');
+      if(comment === null) return;
+      if(!comment.trim()){ showToast('A comment is required for this decision.', 'error'); return; }
+    }
+    transitionRelease(id, newStatus, comment);
+  }));
+
+  // ---------------- Test Runs ----------------
+  const menuTestRuns = document.getElementById('menuTestRuns');
+  if(menuTestRuns) menuTestRuns.addEventListener('click', () => {
+    const next = !state.showTestRuns;
+    closeAllPanels();
+    state.showTestRuns = next;
+    render();
+    if(next) loadTestRuns();
+  });
+  const closeTestRuns = document.getElementById('closeTestRuns');
+  if(closeTestRuns) closeTestRuns.addEventListener('click', () => { state.showTestRuns = false; render(); });
+  const toggleCreateTestRun = document.getElementById('toggleCreateTestRun');
+  if(toggleCreateTestRun) toggleCreateTestRun.addEventListener('click', () => { state.showCreateTestRun = !state.showCreateTestRun; render(); });
+  const saveTestRunBtn = document.getElementById('saveTestRunBtn');
+  if(saveTestRunBtn) saveTestRunBtn.addEventListener('click', () => {
+    const name = document.getElementById('runName').value.trim();
+    if(!name){ showToast('Test run name is required.', 'error'); return; }
+    const targetEnvironment = document.getElementById('runTargetEnv').value.trim();
+    const releaseId = document.getElementById('runRelease').value;
+    const suiteId = document.getElementById('runSuite').value;
+    const envTargetId = document.getElementById('runEnvTarget').value;
+    createTestRun({
+      name, targetEnvironment,
+      releaseId: releaseId ? Number(releaseId) : null,
+      suiteId: suiteId ? Number(suiteId) : null,
+      environmentTargetId: envTargetId ? Number(envTargetId) : null
+    });
+  });
+  document.querySelectorAll('[data-toggle-run]').forEach(el => el.addEventListener('click', () => {
+    toggleTestRunDetail(Number(el.dataset.toggleRun));
+  }));
+  document.querySelectorAll('[data-record-result]').forEach(el => el.addEventListener('click', () => {
+    const id = Number(el.dataset.recordResult);
+    state.recordResultRunId = state.recordResultRunId === id ? null : id;
+    render();
+  }));
+  document.querySelectorAll('[data-save-result]').forEach(el => el.addEventListener('click', () => {
+    const runId = Number(el.dataset.saveResult);
+    const testCaseId = document.getElementById('recResultTcId_' + runId).value.trim();
+    const platform = document.getElementById('recResultPlatform_' + runId).value.trim();
+    const status = document.getElementById('recResultStatus_' + runId).value;
+    const notes = document.getElementById('recResultNotes_' + runId).value.trim();
+    if(!testCaseId){ showToast('Test case ID is required.', 'error'); return; }
+    recordManualResult(runId, testCaseId, platform, status, notes);
+  }));
+  document.querySelectorAll('[data-create-bug]').forEach(el => el.addEventListener('click', () => {
+    createBugFromResult(Number(el.dataset.createBug), Number(el.dataset.resultId));
+  }));
+
+  // ---------------- Reports ----------------
+  const menuReports = document.getElementById('menuReports');
+  if(menuReports) menuReports.addEventListener('click', () => {
+    const next = !state.showReports;
+    closeAllPanels();
+    state.showReports = next;
+    render();
+    if(next) loadReports();
+  });
+  const closeReports = document.getElementById('closeReports');
+  if(closeReports) closeReports.addEventListener('click', () => { state.showReports = false; render(); });
+
+  // ---------------- API Keys ----------------
+  const menuApiKeys = document.getElementById('menuApiKeys');
+  if(menuApiKeys) menuApiKeys.addEventListener('click', () => {
+    const next = !state.showApiKeys;
+    closeAllPanels();
+    state.showApiKeys = next;
+    render();
+    if(next) loadApiKeys();
+  });
+  const closeApiKeys = document.getElementById('closeApiKeys');
+  if(closeApiKeys) closeApiKeys.addEventListener('click', () => { state.showApiKeys = false; render(); });
+  const createApiKeyBtn = document.getElementById('createApiKeyBtn');
+  if(createApiKeyBtn) createApiKeyBtn.addEventListener('click', () => {
+    const name = document.getElementById('apiKeyName').value.trim();
+    const scope = document.getElementById('apiKeyScope').value.trim();
+    if(!name){ showToast('A name is required.', 'error'); return; }
+    createApiKey(name, scope);
+  });
+  document.querySelectorAll('[data-revoke-apikey]').forEach(el => el.addEventListener('click', () => {
+    if(!confirm('Revoke this API key? Any CI pipeline using it will stop working immediately.')) return;
+    revokeApiKey(Number(el.dataset.revokeApikey));
+  }));
+
+  // ---------------- Environment Targets ----------------
+  const menuEnvironments = document.getElementById('menuEnvironments');
+  if(menuEnvironments) menuEnvironments.addEventListener('click', () => {
+    const next = !state.showEnvironments;
+    closeAllPanels();
+    state.showEnvironments = next;
+    render();
+    if(next) loadEnvironments();
+  });
+  const closeEnvironments = document.getElementById('closeEnvironments');
+  if(closeEnvironments) closeEnvironments.addEventListener('click', () => { state.showEnvironments = false; render(); });
+  const toggleCreateEnvironment = document.getElementById('toggleCreateEnvironment');
+  if(toggleCreateEnvironment) toggleCreateEnvironment.addEventListener('click', () => { state.showCreateEnvironment = !state.showCreateEnvironment; render(); });
+  const saveEnvironmentBtn = document.getElementById('saveEnvironmentBtn');
+  if(saveEnvironmentBtn) saveEnvironmentBtn.addEventListener('click', () => {
+    const name = document.getElementById('envName').value.trim();
+    if(!name){ showToast('Environment name is required.', 'error'); return; }
+    createEnvironment({
+      name,
+      tenant: document.getElementById('envTenant').value.trim(),
+      environmentType: document.getElementById('envType').value,
+      appBaseUrl: document.getElementById('envAppUrl').value.trim(),
+      dashboardBaseUrl: document.getElementById('envDashUrl').value.trim(),
+      appApiBaseUrl: document.getElementById('envApiUrl').value.trim(),
+      masterDbConnectionString: document.getElementById('envMasterDb').value.trim() || null,
+      transactionDbConnectionString: document.getElementById('envTxnDb').value.trim() || null,
+      reportDbConnectionString: document.getElementById('envReportDb').value.trim() || null,
+      requiresTestDataCleanup: document.getElementById('envRequiresCleanup').checked
+    });
+  });
+
+  // ---------------- Duplicate detection ----------------
+  const menuDuplicates = document.getElementById('menuDuplicates');
+  if(menuDuplicates) menuDuplicates.addEventListener('click', () => {
+    const next = !state.showDuplicates;
+    closeAllPanels();
+    state.showDuplicates = next;
+    render();
+    if(next) loadDuplicates();
+  });
+  const closeDuplicates = document.getElementById('closeDuplicates');
+  if(closeDuplicates) closeDuplicates.addEventListener('click', () => { state.showDuplicates = false; render(); });
+
+  // ---------------- Bulk edit ----------------
+  const menuBulkEdit = document.getElementById('menuBulkEdit');
+  if(menuBulkEdit) menuBulkEdit.addEventListener('click', () => {
+    const next = !state.showBulkEdit;
+    closeAllPanels();
+    state.showBulkEdit = next;
+    render();
+  });
+  const closeBulkEdit = document.getElementById('closeBulkEdit');
+  if(closeBulkEdit) closeBulkEdit.addEventListener('click', () => { state.showBulkEdit = false; render(); });
+  const applyBulkEditBtn = document.getElementById('applyBulkEditBtn');
+  if(applyBulkEditBtn) applyBulkEditBtn.addEventListener('click', () => {
+    submitBulkEdit(
+      document.getElementById('bulkIds').value,
+      document.getElementById('bulkPriority').value,
+      document.getElementById('bulkStatus').value,
+      document.getElementById('bulkAddTags').value,
+      document.getElementById('bulkRemoveTags').value
+    );
+  });
+
+  // ---------------- Comments ----------------
+  document.querySelectorAll('[data-add-comment]').forEach(el => el.addEventListener('click', e => {
+    e.stopPropagation();
+    const testCaseId = el.dataset.addComment;
+    const body = document.getElementById('newCommentBody_' + testCaseId).value;
+    addComment(testCaseId, body);
+  }));
+  document.querySelectorAll('[data-delete-comment]').forEach(el => el.addEventListener('click', e => {
+    e.stopPropagation();
+    deleteComment(el.dataset.deleteComment, Number(el.dataset.commentId));
+  }));
+
+  // ---------------- History diff ----------------
+  document.querySelectorAll('[data-toggle-diff]').forEach(el => el.addEventListener('click', e => {
+    e.stopPropagation();
+    toggleHistoryDiff(el.dataset.toggleDiff, Number(el.dataset.historyId));
+  }));
+
+
   const importFile = document.getElementById('importFile');
   if(importFile) importFile.addEventListener('change', e => {
     const file = e.target.files[0];
@@ -1649,6 +2606,9 @@ function wireEvents(){
         state.historyCache[id] = [];
         if(state.expandedId === id) render();
       });
+    }
+    if(state.commentsCache[id] === undefined){
+      loadComments(id);
     }
   }));
 
