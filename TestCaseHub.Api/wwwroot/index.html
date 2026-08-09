@@ -148,10 +148,38 @@ function clearAuth(){
 }
 let AUTH = loadAuth();
 
+// Exchanges the stored refresh token for a new access token + rotated refresh token, so a
+// session survives past the JWT's 1-hour lifetime without forcing a full re-login. Concurrent
+// callers (multiple requests hitting 401 at the same moment) share one in-flight refresh
+// instead of each firing their own -- redeeming the same refresh token twice would invalidate
+// the second attempt, since RefreshTokenService rotates it on every use.
+let _refreshInFlight = null;
+async function refreshAuthToken(){
+  if(_refreshInFlight) return _refreshInFlight;
+  _refreshInFlight = (async () => {
+    if(!AUTH || !AUTH.refreshToken) throw new Error('No refresh token available.');
+    const base = AUTH.apiBase || '';
+    const res = await fetch(base + '/api/auth/refresh', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refreshToken: AUTH.refreshToken })
+    });
+    if(!res.ok) throw new Error('Refresh token is invalid or expired.');
+    const data = await res.json();
+    saveAuth(Object.assign({}, AUTH, {
+      token: data.token, refreshToken: data.refreshToken,
+      email: data.email || AUTH.email, displayName: data.displayName || AUTH.displayName, role: data.role || AUTH.role
+    }));
+    return AUTH;
+  })();
+  try{ return await _refreshInFlight; }
+  finally { _refreshInFlight = null; }
+}
+
 // Every business-data call goes through here — attaches the JWT, resolves against the saved
 // server URL, and turns server error bodies (missing-field lists, ASP.NET validation problems,
 // plain-string BadRequest/Conflict messages) into one readable Error.
-async function apiFetch(path, options){
+async function apiFetch(path, options, _isRetryAfterRefresh){
   options = options || {};
   const headers = Object.assign({ 'Content-Type': 'application/json' }, options.headers || {});
   if(AUTH && AUTH.token) headers['Authorization'] = 'Bearer ' + AUTH.token;
@@ -163,6 +191,16 @@ async function apiFetch(path, options){
     throw new Error('Could not reach the server at ' + base + ' — check the API URL and that the server is running.');
   }
   if(res.status === 401){
+    // The JWT itself only lives an hour -- try a silent refresh once before giving up, so an
+    // active session doesn't get kicked back to the login screen just because an hour passed.
+    if(!_isRetryAfterRefresh && AUTH && AUTH.refreshToken){
+      try{
+        await refreshAuthToken();
+        return apiFetch(path, options, true);
+      } catch(refreshErr){
+        // Refresh token itself is gone/expired -- fall through to the real logout below.
+      }
+    }
     clearAuth();
     state.showLogin = true;
     state.loginError = 'Your session expired — please log in again.';
@@ -379,7 +417,7 @@ function fmtDate(iso){ if(!iso) return ''; const d = new Date(iso); return d.toL
 // DATA now mirrors whatever the server most recently returned — it is a cache for rendering,
 // not the source of truth. bootstrap() fills it after login; module selection, history expand,
 // AI-generate and import all refresh the relevant slice after they write to the server.
-let DATA = { modules: [], taskLinks: [], testCases: [], history: [], priorities: PRIORITIES.slice(), statuses: STATUSES.slice(), users: [], invites: [], notifications: [], suites: [], releases: [], testRuns: [], coverage: [], trend: [], apiKeys: [], environments: [], duplicates: [] };
+let DATA = { modules: [], taskLinks: [], testCases: [], history: [], priorities: PRIORITIES.slice(), statuses: STATUSES.slice(), users: [], invites: [], notifications: [], suites: [], releases: [], testRuns: [], coverage: [], trend: [], apiKeys: [], environments: [], duplicates: [], auditLog: [] };
 
 let state = {
   showLogin: true,
@@ -422,6 +460,8 @@ let state = {
   usersLoading: false,
   showInviteLinks: false,
   invitesLoading: false,
+  showAuditLog: false,
+  auditLogLoading: false,
   // A password-reset email link points at "<origin>/reset-password?token=..." -- if that's
   // how this page was opened, show the "set a new password" screen instead of the normal
   // login form, regardless of whether someone happens to already be logged in on this browser.
@@ -483,6 +523,7 @@ function closeAllPanels(){
   state.importCommitted = false;
   state.showManageUsers = false;
   state.showInviteLinks = false;
+  state.showAuditLog = false;
   state.showNotifications = false;
   state.showSuites = false;
   state.showCreateStaticSuite = false;
@@ -539,6 +580,9 @@ function filteredTestCases(){
 // even see controls that would just come back as a 403 if clicked.
 function canEditContent(){
   return !!(AUTH && AUTH.role && AUTH.role !== 'Viewer');
+}
+function canManageAutomationReady(){
+  return !!(AUTH && (AUTH.role === 'Lead' || AUTH.role === 'Admin'));
 }
 
 function escapeHtml(s){
@@ -755,7 +799,7 @@ async function submitLogin(){
     const path = mode === 'login' ? '/api/auth/login' : '/api/auth/register';
     const body = mode === 'login' ? { email, password } : { email, password, displayName, inviteCode };
     const res = await authRequest(apiBase, path, body);
-    saveAuth({ token: res.token, apiBase, email: res.email || email, displayName: res.displayName || displayName, role: res.role });
+    saveAuth({ token: res.token, refreshToken: res.refreshToken, apiBase, email: res.email || email, displayName: res.displayName || displayName, role: res.role });
     state.loginBusy = false;
     await bootstrap();
   } catch(err){
@@ -843,6 +887,7 @@ function render(){
         ${state.showImport ? renderImportForm() : ''}
         ${state.showManageUsers ? renderManageUsers() : ''}
         ${state.showInviteLinks ? renderInviteLinks() : ''}
+        ${state.showAuditLog ? renderAuditLog() : ''}
         ${state.showNotifications ? renderNotifications() : ''}
         ${state.showSuites ? renderSuites() : ''}
         ${state.showReleases ? renderReleases() : ''}
@@ -868,7 +913,7 @@ function renderMainArea(){
 
 function isAnyPanelOpen(){
   return state.showAddModule || state.showAddTestCase || !!state.editingId || !!state.showAddTaskLink || state.showExportPicker || state.showImport ||
-    state.showManageUsers || state.showInviteLinks || state.showNotifications || state.showSuites || state.showReleases || state.showTestRuns || state.showReports ||
+    state.showManageUsers || state.showInviteLinks || state.showAuditLog || state.showNotifications || state.showSuites || state.showReleases || state.showTestRuns || state.showReports ||
     state.showApiKeys || state.showEnvironments || state.showDuplicates || state.showBulkEdit;
 }
 
@@ -1018,6 +1063,40 @@ function renderInviteLinks(){
   `;
 }
 
+
+// ---------------- Audit Log (Admin) ----------------
+async function loadAuditLog(){
+  state.auditLogLoading = true; render();
+  try{ DATA.auditLog = await apiFetch('/api/users/audit-log'); }
+  catch(err){ showToast('Could not load audit log: ' + err.message, 'error'); }
+  state.auditLogLoading = false; render();
+}
+function renderAuditLog(){
+  if(state.auditLogLoading){
+    return `<div class="panel"><h3>Audit Log</h3><p class="sub" style="margin-top:-6px;">Loading…</p></div>`;
+  }
+  const rows = (DATA.auditLog || []).slice().sort((a,b)=> a.occurredAt < b.occurredAt ? 1 : -1).map(l => `
+    <tr>
+      <td>${fmtDate(l.occurredAt)}</td>
+      <td>${escapeHtml(l.actorDisplayName)} <span class="muted">(${escapeHtml(l.actorEmail)})</span></td>
+      <td>${escapeHtml(l.action)}</td>
+      <td>${escapeHtml(l.targetDescription||'')}</td>
+      <td><span class="muted" style="font-size:11px;">${escapeHtml((l.detailsJson||'').slice(0,120))}</span></td>
+    </tr>
+  `).join('');
+
+  return `
+    <div class="panel">
+      <h3>Audit Log</h3>
+      <p class="sub" style="margin-top:-6px;">Role/scope changes, deactivations, invite and API key activity — every administrative action, newest first.</p>
+      <table style="margin-top:10px;">
+        <thead><tr><th>When</th><th>Actor</th><th>Action</th><th>Target</th><th>Details</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="5" class="empty">No audit entries yet.</td></tr>'}</tbody>
+      </table>
+      <div class="actions-row"><button type="button" class="ghost" id="closeAuditLog">Close</button></div>
+    </div>
+  `;
+}
 
 // ---------------- Notifications ----------------
 async function loadNotifications(){
@@ -1802,6 +1881,7 @@ function renderSidebar(){
       <div class="sidebar-item menu-item" id="menuReports" title="Reports"><span class="item-icon">📊</span><span class="item-text">Reports</span></div>
       ${(AUTH && AUTH.role === 'Admin') ? `<div class="sidebar-item menu-item" id="menuManageUsers" title="Manage Users"><span class="item-icon">🛡️</span><span class="item-text">Manage Users</span></div>` : ''}
       ${(AUTH && AUTH.role === 'Admin') ? `<div class="sidebar-item menu-item" id="menuInviteLinks" title="Invite Links"><span class="item-icon">🎟️</span><span class="item-text">Invite Links</span></div>` : ''}
+      ${(AUTH && AUTH.role === 'Admin') ? `<div class="sidebar-item menu-item" id="menuAuditLog" title="Audit Log"><span class="item-icon">📜</span><span class="item-text">Audit Log</span></div>` : ''}
       ${(AUTH && AUTH.role === 'Admin') ? `<div class="sidebar-item menu-item" id="menuApiKeys" title="API Keys"><span class="item-icon">🔑</span><span class="item-text">API Keys</span></div>` : ''}
       ${(AUTH && AUTH.role === 'Admin') ? `<div class="sidebar-item menu-item" id="menuEnvironments" title="Environment Targets"><span class="item-icon">🌐</span><span class="item-text">Environment Targets</span></div>` : ''}
     </div>
@@ -2008,10 +2088,31 @@ function renderTestCaseForm(){
         <div class="field"><label>Tags (comma separated)</label><input type="text" id="tcTags" value="${editing ? escapeHtml((editing.tags||[]).join(', ')) : ''}"></div>
       </div>
 
+      <h4 style="margin-top:18px;margin-bottom:6px;">Automation</h4>
       <div class="field">
-        <label><input type="checkbox" id="tcAutoReady" ${editing && editing.automationReady ? 'checked':''}> Automation-ready</label>
+        <label>
+          <input type="checkbox" id="tcAutoReady" ${editing && editing.automationReady ? 'checked':''} ${canManageAutomationReady() ? '' : 'disabled'}>
+          Automation-ready
+        </label>
+        ${!canManageAutomationReady() ? '<p class="sub" style="margin-top:-4px;">Only Lead or Admin can mark a test case automation-ready.</p>' : ''}
       </div>
-      <div class="field"><label>Automation script reference (once written)</label><input type="text" id="tcAutoRef" value="${editing ? escapeHtml(editing.automationScriptRef||'') : ''}" placeholder="e.g. tests/scheme/e2e_scheme_apply.spec.ts"></div>
+      <div class="field"><label>Automation script reference (if a hand-written script covers this case)</label><input type="text" id="tcAutoRef" value="${editing ? escapeHtml(editing.automationScriptRef||'') : ''}" placeholder="e.g. tests/scheme/e2e_scheme_apply.spec.ts"></div>
+
+      <p class="sub" style="margin-top:10px;margin-bottom:-4px;">Or — for a simple check with no script at all, fill in an API check below (the automation pipeline runs this directly from this config):</p>
+      <div class="grid2">
+        <div class="field"><label>API endpoint (relative path)</label><input type="text" id="tcAutoApiEndpoint" value="${editing && editing.automationConfig ? escapeHtml(editing.automationConfig.apiEndpoint||'') : ''}" placeholder="e.g. /api/health"></div>
+        <div class="field"><label>Method</label>
+          <select id="tcAutoApiMethod">
+            ${['GET','POST','PUT','DELETE'].map(m => `<option ${editing && editing.automationConfig && editing.automationConfig.apiMethod===m ? 'selected':''}>${m}</option>`).join('')}
+          </select>
+        </div>
+        <div class="field"><label>Expected HTTP status</label><input type="number" id="tcAutoApiExpectedStatus" value="${editing && editing.automationConfig && editing.automationConfig.apiExpectedStatus != null ? editing.automationConfig.apiExpectedStatus : 200}"></div>
+      </div>
+      <p class="sub" style="margin-top:2px;margin-bottom:-4px;">Or a read-only DB check (SELECT only — automation is never allowed to write):</p>
+      <div class="grid2">
+        <div class="field"><label>DB query (SELECT only)</label><input type="text" id="tcAutoDbQuery" value="${editing && editing.automationConfig ? escapeHtml(editing.automationConfig.dbQuery||'') : ''}" placeholder="e.g. SELECT COUNT(*) FROM Orders WHERE Status='Pending'"></div>
+        <div class="field"><label>Expected value</label><input type="text" id="tcAutoDbExpectedValue" value="${editing && editing.automationConfig ? escapeHtml(editing.automationConfig.dbExpectedValue||'') : ''}"></div>
+      </div>
 
       <div class="actions-row">
         <button id="saveTestCase">${editing ? 'Save changes' : 'Create test case'}</button>
@@ -2179,6 +2280,17 @@ function wireEvents(){
 
   const closeInviteLinks = document.getElementById('closeInviteLinks');
   if(closeInviteLinks) closeInviteLinks.addEventListener('click', () => { state.showInviteLinks = false; render(); });
+
+  const menuAuditLog = document.getElementById('menuAuditLog');
+  if(menuAuditLog) menuAuditLog.addEventListener('click', () => {
+    const next = !state.showAuditLog;
+    closeAllPanels();
+    state.showAuditLog = next;
+    render();
+    if(next) loadAuditLog();
+  });
+  const closeAuditLog = document.getElementById('closeAuditLog');
+  if(closeAuditLog) closeAuditLog.addEventListener('click', () => { state.showAuditLog = false; render(); });
 
   const generateInviteBtn = document.getElementById('generateInviteBtn');
   if(generateInviteBtn) generateInviteBtn.addEventListener('click', () => {
@@ -2753,7 +2865,14 @@ async function saveTestCase(){
     status: document.getElementById('tcStatus').value,
     tags,
     automationReady: document.getElementById('tcAutoReady').checked,
-    automationScriptRef: document.getElementById('tcAutoRef').value.trim()
+    automationScriptRef: document.getElementById('tcAutoRef').value.trim(),
+    automationConfig: {
+      apiEndpoint: document.getElementById('tcAutoApiEndpoint').value.trim() || null,
+      apiMethod: document.getElementById('tcAutoApiMethod').value || null,
+      apiExpectedStatus: document.getElementById('tcAutoApiExpectedStatus').value ? Number(document.getElementById('tcAutoApiExpectedStatus').value) : null,
+      dbQuery: document.getElementById('tcAutoDbQuery').value.trim() || null,
+      dbExpectedValue: document.getElementById('tcAutoDbExpectedValue').value.trim() || null
+    }
   };
 
   const missing = validateTestCasePayload(payload);
@@ -2766,7 +2885,8 @@ async function saveTestCase(){
     moduleId: Number(moduleId), layer, verificationType, title: payload.title,
     preconditions: payload.preconditions, steps: payload.steps,
     priority: payload.priority, type: payload.type, status: payload.status,
-    tags: payload.tags, automationReady: payload.automationReady, automationScriptRef: payload.automationScriptRef
+    tags: payload.tags, automationReady: payload.automationReady, automationScriptRef: payload.automationScriptRef,
+    automationConfig: payload.automationConfig
   };
 
   const saveBtn = document.getElementById('saveTestCase');

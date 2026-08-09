@@ -24,8 +24,11 @@ public class EnvironmentsController : ControllerBase
     private string ActorDisplayName => User.FindFirstValue("displayName") ?? "Unknown";
 
     [HttpGet]
-    public async Task<ActionResult<List<EnvironmentTargetResponse>>> GetAll() =>
-        (await _store.GetEnvironmentTargetsAsync()).Select(EnvironmentTargetResponse.From).ToList();
+    public async Task<ActionResult<List<EnvironmentTargetResponse>>> GetAll()
+    {
+        if (!User.CanManageUsers()) return Forbid(); // Admin-only, matching Create below.
+        return (await _store.GetEnvironmentTargetsAsync()).Select(EnvironmentTargetResponse.From).ToList();
+    }
 
     [HttpPost]
     public async Task<ActionResult<EnvironmentTargetResponse>> Create(CreateEnvironmentTargetRequest req)

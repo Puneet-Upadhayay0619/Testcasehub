@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using TestCaseHub.Api.Dtos;
+using TestCaseHub.Api.Services;
 using TestCaseHub.Api.Storage;
 
 namespace TestCaseHub.Api.Controllers;
@@ -19,6 +20,8 @@ public class LookupsController : ControllerBase
     [HttpPost("priorities")]
     public async Task<ActionResult> AddPriority(AddLookupRequest req)
     {
+        if (!User.CanEditTestCases()) return Forbid();
+
         var val = (req.Value ?? "").Trim();
         if (string.IsNullOrWhiteSpace(val)) return BadRequest("Value is required.");
         if (await _store.PriorityExistsAsync(val)) return Conflict("This priority already exists.");
@@ -32,6 +35,8 @@ public class LookupsController : ControllerBase
     [HttpPost("statuses")]
     public async Task<ActionResult> AddStatus(AddLookupRequest req)
     {
+        if (!User.CanEditTestCases()) return Forbid();
+
         var val = (req.Value ?? "").Trim();
         if (string.IsNullOrWhiteSpace(val)) return BadRequest("Value is required.");
         if (await _store.StatusExistsAsync(val)) return Conflict("This status already exists.");
