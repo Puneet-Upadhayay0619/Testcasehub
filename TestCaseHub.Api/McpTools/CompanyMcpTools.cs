@@ -233,4 +233,108 @@ public class CompanyMcpTools
 
         return new TeamResponse(team.Id, team.CompanyId, team.Name, team.Description, team.CreatedBy, team.CreatedAt, new List<int>(), new List<int>());
     }
+
+    [McpServerTool(Name = "add_team_module"), Description(
+        "Admin (own company) or SuperAdmin (any company, as long as the team and module are both in that same " +
+        "company). Shares a module with a team -- this is what lets two different teams both see the same " +
+        "module. A module already assigned to another team is fine; that's the whole point of this feature.")]
+    public async Task<object> AddTeamModule(ClaimsPrincipal user, int teamId, int moduleId)
+    {
+        // Same rule and order as the REST POST /api/teams/{id}/modules endpoint.
+        if (!user.CanManageTeams())
+            return new { error = "You do not have permission to manage teams (Admin role or above required)." };
+
+        var team = await _store.GetTeamAsync(teamId);
+        if (team is null) return new { error = "Team not found." };
+        if (!user.HasCompanyAccess(team.CompanyId)) return new { error = "Team not found." };
+
+        var module = await _store.GetModuleAsync(moduleId);
+        if (module is null) return new { error = "Module not found." };
+        if (module.CompanyId != team.CompanyId) return new { error = "That module does not belong to this team's company." };
+
+        await _store.AddTeamModuleAsync(teamId, moduleId);
+
+        return new
+        {
+            ok = true, teamId, teamName = team.Name, moduleId, moduleName = module.Name,
+            moduleIds = await _store.GetModuleIdsForTeamAsync(teamId)
+        };
+    }
+
+    [McpServerTool(Name = "remove_team_module"), Description("Admin (own company) or SuperAdmin (any company). Unshares a module from a team.")]
+    public async Task<object> RemoveTeamModule(ClaimsPrincipal user, int teamId, int moduleId)
+    {
+        if (!user.CanManageTeams())
+            return new { error = "You do not have permission to manage teams (Admin role or above required)." };
+
+        var team = await _store.GetTeamAsync(teamId);
+        if (team is null) return new { error = "Team not found." };
+        if (!user.HasCompanyAccess(team.CompanyId)) return new { error = "Team not found." };
+
+        await _store.RemoveTeamModuleAsync(teamId, moduleId);
+        return new { ok = true, teamId, moduleId, moduleIds = await _store.GetModuleIdsForTeamAsync(teamId) };
+    }
+
+    private static bool IsValidEmailFormat(string email)
+    {
+        if (string.IsNullOrWhiteSpace(email)) return false;
+        var at = email.IndexOf('@');
+        return at > 0 && at < email.Length - 1 && email.IndexOf('.', at) > at + 1 && !email.Contains(' ');
+    }
+
+    [McpServerTool(Name = "update_user_email"), Description(
+        "Change a user's email/login address. Omit userId (or pass your own id) to change your OWN account's " +
+        "email -- that needs no special permission, same as the profile page. To change SOMEONE ELSE's email " +
+        "you need Admin role or above (own company) or SuperAdmin (any company); only a SuperAdmin can change " +
+        "another SuperAdmin's email.")]
+    public async Task<object> UpdateUserEmail(ClaimsPrincipal user, [Description("New email address")] string newEmail, [Description("Target user id; omit to change your own account")] int? userId = null)
+    {
+        var myIdStr = user.FindFirstValue(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Sub);
+        var myId = int.TryParse(myIdStr, out var parsed) ? parsed : (int?)null;
+        if (myId is null) return new { error = "Could not identify the calling user." };
+
+        var targetId = userId ?? myId.Value;
+        Models.User? target;
+        if (targetId == myId.Value)
+        {
+            target = await _store.GetUserByIdAsync(myId.Value);
+        }
+        else
+        {
+            // Same rule as the REST PUT /api/users/{id}/email endpoint.
+            if (!user.CanManageUsers())
+                return new { error = "You do not have permission to change other users' email (Admin role or above required)." };
+            target = await _store.GetUserByIdAsync(targetId);
+            if (target is not null)
+            {
+                if (target.Role == Roles.SuperAdmin && !user.IsSuperAdmin())
+                    return new { error = "Only a SuperAdmin can change another SuperAdmin's email." };
+                if (target.CompanyId is not null && !user.HasCompanyAccess(target.CompanyId.Value))
+                    return new { error = "User not found." };
+            }
+        }
+        if (target is null) return new { error = "User not found." };
+
+        var normalized = (newEmail ?? "").Trim().ToLowerInvariant();
+        if (!IsValidEmailFormat(normalized)) return new { error = "Please provide a valid email address." };
+        if (normalized == target.Email.ToLowerInvariant())
+            return new { error = "That is already this account's email address." };
+
+        var existing = await _store.GetUserByEmailAsync(normalized);
+        if (existing is not null && existing.Id != target.Id)
+            return new { error = "An account with this email already exists." };
+
+        var oldEmail = target.Email;
+        target.Email = normalized;
+        target = await _store.UpdateUserAsync(target);
+
+        await _store.AddAuditLogAsync(new AuditLog
+        {
+            CompanyId = target.CompanyId, ActorEmail = EmailOf(user), ActorDisplayName = EmailOf(user), Action = "EmailChanged",
+            TargetDescription = normalized,
+            DetailsJson = System.Text.Json.JsonSerializer.Serialize(new { oldEmail, newEmail = normalized, via = "mcp" })
+        });
+
+        return UserResponse.From(target, await _store.GetTeamIdsForUserAsync(target.Id));
+    }
 }

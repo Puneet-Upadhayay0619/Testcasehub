@@ -23,6 +23,72 @@ public class UsersController : ControllerBase
 
     private string ActorEmail => User.FindFirstValue(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Email) ?? "";
     private string ActorDisplayName => User.FindFirstValue("displayName") ?? "Unknown";
+    private int? ActorUserId => int.TryParse(User.FindFirstValue(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Sub), out var id) ? id : null;
+
+    private static bool IsValidEmailFormat(string email)
+    {
+        // Same lightweight shape check used at registration -- not a full RFC 5322 validator,
+        // just enough to reject obvious typos before they get saved.
+        if (string.IsNullOrWhiteSpace(email)) return false;
+        var at = email.IndexOf('@');
+        return at > 0 && at < email.Length - 1 && email.IndexOf('.', at) > at + 1 && !email.Contains(' ');
+    }
+
+    private async Task<ActionResult<UserResponse>> ChangeEmailInternal(Models.User target, string newEmailRaw)
+    {
+        var newEmail = (newEmailRaw ?? "").Trim().ToLowerInvariant();
+        if (!IsValidEmailFormat(newEmail)) return BadRequest("Please provide a valid email address.");
+        if (newEmail == target.Email.ToLowerInvariant())
+            return BadRequest("That is already this account's email address.");
+
+        var existing = await _store.GetUserByEmailAsync(newEmail);
+        if (existing is not null && existing.Id != target.Id)
+            return Conflict("An account with this email already exists.");
+
+        var oldEmail = target.Email;
+        target.Email = newEmail;
+        target = await _store.UpdateUserAsync(target);
+
+        await _store.AddAuditLogAsync(new AuditLog
+        {
+            CompanyId = target.CompanyId, ActorEmail = ActorEmail, ActorDisplayName = ActorDisplayName, Action = "EmailChanged",
+            TargetDescription = newEmail,
+            DetailsJson = JsonSerializer.Serialize(new { oldEmail, newEmail })
+        });
+
+        return UserResponse.From(target, await _store.GetTeamIdsForUserAsync(target.Id));
+    }
+
+    // Self-service: any authenticated role can change their OWN email (no "manage users"
+    // permission needed to edit your own account). Existing sessions/JWTs still carry the old
+    // email string until the user logs in again or their refresh token rotates -- that's fine
+    // since email isn't used in any permission check (role/companyId are), only for display and
+    // as the login identifier going forward.
+    [HttpPut("me/email")]
+    public async Task<ActionResult<UserResponse>> ChangeMyEmail(UpdateEmailRequest req)
+    {
+        var myId = ActorUserId;
+        if (myId is null) return Unauthorized();
+        var me = await _store.GetUserByIdAsync(myId.Value);
+        if (me is null) return Unauthorized();
+        return await ChangeEmailInternal(me, req.NewEmail);
+    }
+
+    // Admin-driven: change another user's email. Same company-scoping as UpdateAccess, plus an
+    // explicit block on touching a SuperAdmin's email unless the caller is a SuperAdmin too --
+    // UpdateAccess above doesn't have this guard (a gap worth fixing separately), so this new
+    // endpoint doesn't repeat it.
+    [HttpPut("{id:int}/email")]
+    public async Task<ActionResult<UserResponse>> ChangeUserEmail(int id, UpdateEmailRequest req)
+    {
+        if (!User.CanManageUsers()) return Forbid();
+        var target = await _store.GetUserByIdAsync(id);
+        if (target is null) return NotFound();
+        if (target.Role == Roles.SuperAdmin && !User.IsSuperAdmin()) return Forbid();
+        if (target.CompanyId is not null && !User.HasCompanyAccess(target.CompanyId.Value)) return Forbid();
+
+        return await ChangeEmailInternal(target, req.NewEmail);
+    }
 
     [HttpGet]
     public async Task<ActionResult<List<UserResponse>>> GetAll([FromQuery] int? companyId = null)

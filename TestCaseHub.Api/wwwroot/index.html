@@ -939,7 +939,7 @@ function render(){
       <div class="profile-widget">
         <div class="profile-info">
           <div class="profile-name">${escapeHtml((AUTH && (AUTH.displayName || AUTH.email)) || '')}${(AUTH && AUTH.role) ? ` <span class="profile-role">${escapeHtml(AUTH.role)}${(AUTH.role==='SuperAdmin' && state.actingCompanyId) ? ' — acting as Admin' : ''}</span>` : ''}</div>
-          <div class="profile-email">${escapeHtml((AUTH && AUTH.email) || '')}</div>
+          <div class="profile-email">${escapeHtml((AUTH && AUTH.email) || '')} <button type="button" id="editMyEmailBtn" class="small ghost" title="Change email" style="padding:1px 6px;font-size:10px;">edit</button></div>
           ${(AUTH && AUTH.companyName) ? `<div class="profile-company muted" style="font-size:11px;">${escapeHtml(AUTH.companyName)}</div>` : ''}
         </div>
         ${(AUTH && AUTH.role === 'SuperAdmin' && state.actingCompanyId) ? `<button type="button" id="exitCompanyBtn" class="ghost">Exit company</button>` : ''}
@@ -1002,7 +1002,7 @@ function renderSuperAdminShell(){
       <div class="profile-widget">
         <div class="profile-info">
           <div class="profile-name">${escapeHtml((AUTH && (AUTH.displayName || AUTH.email)) || '')} <span class="profile-role">SuperAdmin</span></div>
-          <div class="profile-email">${escapeHtml((AUTH && AUTH.email) || '')}</div>
+          <div class="profile-email">${escapeHtml((AUTH && AUTH.email) || '')} <button type="button" id="editMyEmailBtn" class="small ghost" title="Change email" style="padding:1px 6px;font-size:10px;">edit</button></div>
         </div>
         <button type="button" id="logoutBtn">Logout</button>
       </div>
@@ -1310,6 +1310,39 @@ async function toggleUserActive(id, activate){
   }
 }
 
+async function changeMyEmail(){
+  const current = (AUTH && AUTH.email) || '';
+  const next = prompt('Enter your new email address:', current);
+  if(next === null) return; // cancelled
+  const trimmed = next.trim();
+  if(!trimmed || trimmed.toLowerCase() === current.toLowerCase()) return;
+  try{
+    const updated = await apiFetch('/api/users/me/email', { method:'PUT', body: JSON.stringify({ newEmail: trimmed }) });
+    saveAuth(Object.assign({}, AUTH, { email: updated.email }));
+    render();
+    showToast('Email updated to ' + updated.email + '. Use the new email next time you log in.', 'success');
+  } catch(err){
+    showToast('Could not update email: ' + err.message, 'error');
+  }
+}
+
+async function changeUserEmail(id){
+  const target = (DATA.users || []).find(u => u.id === id);
+  if(!target) return;
+  const next = prompt('Enter new email address for ' + target.email + ':', target.email);
+  if(next === null) return;
+  const trimmed = next.trim();
+  if(!trimmed || trimmed.toLowerCase() === target.email.toLowerCase()) return;
+  try{
+    const updated = await apiFetch('/api/users/' + id + '/email', { method:'PUT', body: JSON.stringify({ newEmail: trimmed }) });
+    DATA.users = (DATA.users || []).map(u => u.id === id ? updated : u);
+    render();
+    showToast('Email updated to ' + updated.email + '.', 'success');
+  } catch(err){
+    showToast('Could not update email: ' + err.message, 'error');
+  }
+}
+
 function renderManageUsers(){
   if(state.usersLoading){
     return `<div class="panel"><h3>Manage Users</h3><p class="sub" style="margin-top:-6px;">Loading users…</p></div>`;
@@ -1325,6 +1358,7 @@ function renderManageUsers(){
       <td>${u.isActive ? '<span class="badge b-active">Active</span>' : '<span class="badge b-deprecated">Inactive</span>'}</td>
       <td>${fmtDate(u.createdAt)}</td>
       <td>
+        <button type="button" class="small ghost" data-edit-email="${u.id}">Edit email</button>
         ${u.isActive
           ? `<button type="button" class="small ghost" data-deactivate-user="${u.id}">Deactivate</button>`
           : `<button type="button" class="small ghost" data-reactivate-user="${u.id}">Reactivate</button>`}
@@ -2661,6 +2695,13 @@ function wireEvents(){
   document.querySelectorAll('[data-reactivate-user]').forEach(el => el.addEventListener('click', () => {
     toggleUserActive(Number(el.dataset.reactivateUser), true);
   }));
+
+  document.querySelectorAll('[data-edit-email]').forEach(el => el.addEventListener('click', () => {
+    changeUserEmail(Number(el.dataset.editEmail));
+  }));
+
+  const editMyEmailBtn = document.getElementById('editMyEmailBtn');
+  if(editMyEmailBtn) editMyEmailBtn.addEventListener('click', changeMyEmail);
 
   const menuInviteLinks = document.getElementById('menuInviteLinks');
   if(menuInviteLinks) menuInviteLinks.addEventListener('click', () => {
