@@ -5,7 +5,7 @@ namespace TestCaseHub.Api.Dtos;
 
 public record RegisterRequest(string Email, string Password, string DisplayName, string? InviteCode = null);
 public record LoginRequest(string Email, string Password);
-public record AuthResponse(string Token, string Email, string DisplayName, string Role, string RefreshToken, int? CompanyId = null, List<int>? TeamIds = null);
+public record AuthResponse(string Token, string Email, string DisplayName, string Role, string RefreshToken, int? CompanyId = null, List<int>? TeamIds = null, string? CompanyName = null);
 public record RefreshRequest(string RefreshToken);
 public record ForgotPasswordRequest(string Email);
 public record ResetPasswordRequest(string Token, string NewPassword);
@@ -171,3 +171,6 @@ public record TeamResponse(int Id, int CompanyId, string Name, string Descriptio
 }
 public record TeamMemberRequest(int UserId);
 public record TeamModuleRequest(int ModuleId);
+
+public record AssignUsersByDomainRequest(string EmailDomain);
+public record AssignUsersByDomainResult(int MatchedCount, List<string> Emails);
