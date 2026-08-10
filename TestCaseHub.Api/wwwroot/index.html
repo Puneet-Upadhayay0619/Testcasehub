@@ -591,6 +591,12 @@ function canEditContent(){
 function canManageAutomationReady(){
   return !!(AUTH && (AUTH.role === 'Lead' || AUTH.role === 'Admin'));
 }
+// UI-only visibility gate for the Automation/Releases sidebar section -- kept separate from
+// canManageAutomationReady() even though the check is identical right now, since these two
+// rules can (and likely will) diverge later without one silently changing the other's meaning.
+function canSeeAutomationMenu(){
+  return !!(AUTH && (AUTH.role === 'Lead' || AUTH.role === 'Admin'));
+}
 
 function escapeHtml(s){
   return String(s==null?'':s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -1873,7 +1879,7 @@ function renderSidebar(){
       ${canEditContent() ? `<div class="sidebar-item menu-item sub-item" id="menuDuplicates" title="Find duplicate test cases"><span class="item-icon">🔎</span><span class="item-text">Find duplicates</span></div>` : ''}
       ${canEditContent() ? `<div class="sidebar-item menu-item sub-item" id="menuBulkEdit" title="Bulk edit test cases"><span class="item-icon">🧮</span><span class="item-text">Bulk edit</span></div>` : ''}
       ` : ''}
-      ${canEditContent() ? `
+      ${canSeeAutomationMenu() ? `
       <div class="sidebar-item menu-item" id="menuReleases" title="Releases"><span class="item-icon">🚀</span><span class="item-text">Releases</span></div>
       <div class="sidebar-item menu-item" id="menuAutomationGroup" title="Automation">
         <span class="item-icon">🤖</span><span class="item-text">Automation ${state.automationMenuOpen ? '▾' : '▸'}</span>
