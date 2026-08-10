@@ -446,6 +446,7 @@ let state = {
   moduleListOpen: false,
   moduleSearch: '',
   sidebarCollapsed: false,
+  automationMenuOpen: false,
   showImport: false,
   importStep: 1,
   importHeaders: [],
@@ -1875,15 +1876,20 @@ function renderSidebar(){
       <div class="sidebar-item menu-item" id="menuDownload" title="Download test cases"><span class="item-icon">📤</span><span class="item-text">Download test cases${exportScopeLabel()}</span></div>
       ${canEditContent() ? `<div class="sidebar-item menu-item" id="menuDuplicates" title="Find duplicate test cases"><span class="item-icon">🔎</span><span class="item-text">Find duplicates</span></div>` : ''}
       ${canEditContent() ? `<div class="sidebar-item menu-item" id="menuBulkEdit" title="Bulk edit test cases"><span class="item-icon">🧮</span><span class="item-text">Bulk edit</span></div>` : ''}
-      <div class="sidebar-item menu-item" id="menuSuites" title="Test Suites"><span class="item-icon">🗂️</span><span class="item-text">Test Suites</span></div>
       <div class="sidebar-item menu-item" id="menuReleases" title="Releases"><span class="item-icon">🚀</span><span class="item-text">Releases</span></div>
-      <div class="sidebar-item menu-item" id="menuTestRuns" title="Test Runs"><span class="item-icon">▶️</span><span class="item-text">Test Runs</span></div>
-      <div class="sidebar-item menu-item" id="menuReports" title="Reports"><span class="item-icon">📊</span><span class="item-text">Reports</span></div>
+      <div class="sidebar-item menu-item" id="menuAutomationGroup" title="Automation">
+        <span class="item-icon">🤖</span><span class="item-text">Automation ${state.automationMenuOpen ? '▾' : '▸'}</span>
+      </div>
+      ${state.automationMenuOpen ? `
+      <div class="sidebar-item menu-item sub-item" id="menuSuites" title="Test Suites"><span class="item-icon">🗂️</span><span class="item-text">Test Suites</span></div>
+      <div class="sidebar-item menu-item sub-item" id="menuTestRuns" title="Test Runs"><span class="item-icon">▶️</span><span class="item-text">Test Runs</span></div>
+      <div class="sidebar-item menu-item sub-item" id="menuReports" title="Reports"><span class="item-icon">📊</span><span class="item-text">Reports</span></div>
+      ${(AUTH && AUTH.role === 'Admin') ? `<div class="sidebar-item menu-item sub-item" id="menuApiKeys" title="API Keys"><span class="item-icon">🔑</span><span class="item-text">API Keys</span></div>` : ''}
+      ${(AUTH && AUTH.role === 'Admin') ? `<div class="sidebar-item menu-item sub-item" id="menuEnvironments" title="Environment Targets"><span class="item-icon">🌐</span><span class="item-text">Environment Targets</span></div>` : ''}
+      ` : ''}
       ${(AUTH && AUTH.role === 'Admin') ? `<div class="sidebar-item menu-item" id="menuManageUsers" title="Manage Users"><span class="item-icon">🛡️</span><span class="item-text">Manage Users</span></div>` : ''}
       ${(AUTH && AUTH.role === 'Admin') ? `<div class="sidebar-item menu-item" id="menuInviteLinks" title="Invite Links"><span class="item-icon">🎟️</span><span class="item-text">Invite Links</span></div>` : ''}
       ${(AUTH && AUTH.role === 'Admin') ? `<div class="sidebar-item menu-item" id="menuAuditLog" title="Audit Log"><span class="item-icon">📜</span><span class="item-text">Audit Log</span></div>` : ''}
-      ${(AUTH && AUTH.role === 'Admin') ? `<div class="sidebar-item menu-item" id="menuApiKeys" title="API Keys"><span class="item-icon">🔑</span><span class="item-text">API Keys</span></div>` : ''}
-      ${(AUTH && AUTH.role === 'Admin') ? `<div class="sidebar-item menu-item" id="menuEnvironments" title="Environment Targets"><span class="item-icon">🌐</span><span class="item-text">Environment Targets</span></div>` : ''}
     </div>
   `;
 }
@@ -2332,6 +2338,12 @@ function wireEvents(){
   }));
 
   // ---------------- Test Suites ----------------
+  const menuAutomationGroup = document.getElementById('menuAutomationGroup');
+  if(menuAutomationGroup) menuAutomationGroup.addEventListener('click', () => {
+    state.automationMenuOpen = !state.automationMenuOpen;
+    render();
+  });
+
   const menuSuites = document.getElementById('menuSuites');
   if(menuSuites) menuSuites.addEventListener('click', () => {
     const next = !state.showSuites;
