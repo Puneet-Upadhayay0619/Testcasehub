@@ -170,7 +170,7 @@ async function refreshAuthToken(){
     saveAuth(Object.assign({}, AUTH, {
       token: data.token, refreshToken: data.refreshToken,
       email: data.email || AUTH.email, displayName: data.displayName || AUTH.displayName, role: data.role || AUTH.role,
-      companyId: data.companyId, teamIds: data.teamIds || AUTH.teamIds || []
+      companyId: data.companyId, teamIds: data.teamIds || AUTH.teamIds || [], companyName: data.companyName || AUTH.companyName || null
     }));
     return AUTH;
   })();
@@ -852,7 +852,7 @@ async function submitLogin(){
     const path = mode === 'login' ? '/api/auth/login' : '/api/auth/register';
     const body = mode === 'login' ? { email, password } : { email, password, displayName, inviteCode };
     const res = await authRequest(apiBase, path, body);
-    saveAuth({ token: res.token, refreshToken: res.refreshToken, apiBase, email: res.email || email, displayName: res.displayName || displayName, role: res.role, companyId: res.companyId, teamIds: res.teamIds || [] });
+    saveAuth({ token: res.token, refreshToken: res.refreshToken, apiBase, email: res.email || email, displayName: res.displayName || displayName, role: res.role, companyId: res.companyId, teamIds: res.teamIds || [], companyName: res.companyName || null });
     state.loginBusy = false;
     await bootstrap();
   } catch(err){
@@ -940,6 +940,7 @@ function render(){
         <div class="profile-info">
           <div class="profile-name">${escapeHtml((AUTH && (AUTH.displayName || AUTH.email)) || '')}${(AUTH && AUTH.role) ? ` <span class="profile-role">${escapeHtml(AUTH.role)}${(AUTH.role==='SuperAdmin' && state.actingCompanyId) ? ' — acting as Admin' : ''}</span>` : ''}</div>
           <div class="profile-email">${escapeHtml((AUTH && AUTH.email) || '')}</div>
+          ${(AUTH && AUTH.companyName) ? `<div class="profile-company muted" style="font-size:11px;">${escapeHtml(AUTH.companyName)}</div>` : ''}
         </div>
         ${(AUTH && AUTH.role === 'SuperAdmin' && state.actingCompanyId) ? `<button type="button" id="exitCompanyBtn" class="ghost">Exit company</button>` : ''}
         <button type="button" id="logoutBtn">Logout</button>
@@ -1052,6 +1053,21 @@ async function createCompanyAdminInvite(companyId){
   }
 }
 
+async function assignUsersByDomain(companyId, domain){
+  try{
+    const result = await apiFetch('/api/companies/' + companyId + '/assign-users-by-domain', {
+      method: 'POST', body: JSON.stringify({ emailDomain: domain })
+    });
+    if(result.matchedCount === 0){
+      showToast('No users found with @' + domain + '.', 'error');
+    } else {
+      showToast(result.matchedCount + ' user(s) moved: ' + result.emails.join(', '), 'success');
+    }
+  } catch(err){
+    showToast('Could not move users: ' + err.message, 'error');
+  }
+}
+
 function renderCompaniesPage(){
   if(state.companiesLoading){
     return `<div class="panel"><h3>Companies</h3><p class="sub" style="margin-top:-6px;">Loading…</p></div>`;
@@ -1062,8 +1078,14 @@ function renderCompaniesPage(){
       <td>${c.status === 'Active' ? '<span class="badge b-active">Active</span>' : '<span class="badge b-deprecated">' + escapeHtml(c.status) + '</span>'}</td>
       <td>${fmtDate(c.createdAt)}</td>
       <td>
-        <button type="button" class="small ghost" data-invite-company="${c.id}" ${state.companyInviteBusyId===c.id?'disabled':''}>${state.companyInviteBusyId===c.id?'Creating…':'Generate Admin referral code'}</button>
-        <button type="button" class="small" data-enter-company="${c.id}" title="Do everything this company's Admin can do">Enter company</button>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+          <button type="button" class="small ghost" data-invite-company="${c.id}" ${state.companyInviteBusyId===c.id?'disabled':''}>${state.companyInviteBusyId===c.id?'Creating…':'Generate Admin referral code'}</button>
+          <button type="button" class="small" data-enter-company="${c.id}" title="Do everything this company's Admin can do">Enter company</button>
+        </div>
+        <div style="display:flex;gap:6px;margin-top:6px;align-items:center;">
+          <input type="text" class="assign-domain-input" data-company="${c.id}" placeholder="e.g. gmail.com" style="max-width:160px;">
+          <button type="button" class="small ghost" data-assign-domain="${c.id}">Move users by email domain</button>
+        </div>
       </td>
     </tr>
   `).join('');
@@ -2676,6 +2698,14 @@ function wireEvents(){
   });
   document.querySelectorAll('[data-invite-company]').forEach(el => el.addEventListener('click', () => {
     createCompanyAdminInvite(Number(el.dataset.inviteCompany));
+  }));
+  document.querySelectorAll('[data-assign-domain]').forEach(el => el.addEventListener('click', () => {
+    const companyId = Number(el.dataset.assignDomain);
+    const input = document.querySelector('.assign-domain-input[data-company="' + companyId + '"]');
+    const domain = input ? input.value.trim().replace(/^@/, '') : '';
+    if(!domain){ showToast('Enter an email domain first, e.g. gmail.com', 'error'); return; }
+    if(!confirm('Move every user whose email ends with @' + domain + ' into this company?')) return;
+    assignUsersByDomain(companyId, domain);
   }));
   document.querySelectorAll('[data-enter-company]').forEach(el => el.addEventListener('click', () => {
     state.actingCompanyId = Number(el.dataset.enterCompany);

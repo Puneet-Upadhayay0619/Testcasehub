@@ -22,6 +22,13 @@ public class AuthController : ControllerBase
 
     private static string HashToken(string raw) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(raw)));
 
+    private async Task<string?> CompanyNameForAsync(User user)
+    {
+        if (user.CompanyId is null) return null;
+        var company = await _store.GetCompanyAsync(user.CompanyId.Value);
+        return company?.Name;
+    }
+
     [HttpPost("register")]
     [EnableRateLimiting("auth")]
     public async Task<ActionResult<AuthResponse>> Register(RegisterRequest req)
@@ -109,7 +116,7 @@ public class AuthController : ControllerBase
 
         var refreshToken = await _refresh.IssueAsync(user.Id);
         var teamIds = await _store.GetTeamIdsForUserAsync(user.Id);
-        return Ok(new AuthResponse(_jwt.GenerateToken(user, teamIds), user.Email, user.DisplayName, user.Role, refreshToken, user.CompanyId, teamIds));
+        return Ok(new AuthResponse(_jwt.GenerateToken(user, teamIds), user.Email, user.DisplayName, user.Role, refreshToken, user.CompanyId, teamIds, await CompanyNameForAsync(user)));
     }
 
     [HttpPost("login")]
@@ -129,7 +136,7 @@ public class AuthController : ControllerBase
 
         var refreshToken = await _refresh.IssueAsync(user.Id);
         var teamIds = await _store.GetTeamIdsForUserAsync(user.Id);
-        return Ok(new AuthResponse(_jwt.GenerateToken(user, teamIds), user.Email, user.DisplayName, user.Role, refreshToken, user.CompanyId, teamIds));
+        return Ok(new AuthResponse(_jwt.GenerateToken(user, teamIds), user.Email, user.DisplayName, user.Role, refreshToken, user.CompanyId, teamIds, await CompanyNameForAsync(user)));
     }
 
     // Exchanges a still-valid refresh token for a brand-new access token (JWT) + a rotated
@@ -144,7 +151,7 @@ public class AuthController : ControllerBase
         if (result is null) return Unauthorized("Refresh token is invalid, expired, or already used — please log in again.");
         var (user, newRefreshToken) = result.Value;
         var teamIds = await _store.GetTeamIdsForUserAsync(user.Id);
-        return Ok(new AuthResponse(_jwt.GenerateToken(user, teamIds), user.Email, user.DisplayName, user.Role, newRefreshToken, user.CompanyId, teamIds));
+        return Ok(new AuthResponse(_jwt.GenerateToken(user, teamIds), user.Email, user.DisplayName, user.Role, newRefreshToken, user.CompanyId, teamIds, await CompanyNameForAsync(user)));
     }
 
     // Deliberately returns the exact same generic response whether or not the email exists —

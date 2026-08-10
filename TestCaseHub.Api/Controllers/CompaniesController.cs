@@ -107,4 +107,42 @@ public class CompaniesController : ControllerBase
         invite = await _store.UpdateCompanyAdminInviteAsync(invite);
         return CompanyAdminInviteResponse.From(invite);
     }
+
+    // One-time-migration-style bulk move: every user whose email ends with @<domain>,
+    // REGARDLESS of which company they're currently in, gets moved into this company. Built
+    // for exactly the "our existing users are all sitting in the auto-created Default Company
+    // -- split them into real companies by email domain" case. Deliberately does NOT touch
+    // modules/test cases/teams the user already created -- those stay wherever they were, only
+    // the USER's own company membership moves. SuperAdmin-only, same bar as everything else on
+    // this controller.
+    [HttpPost("{id:int}/assign-users-by-domain")]
+    public async Task<ActionResult<AssignUsersByDomainResult>> AssignUsersByDomain(int id, AssignUsersByDomainRequest req)
+    {
+        if (!User.CanManageCompanies()) return Forbid();
+        var company = await _store.GetCompanyAsync(id);
+        if (company is null) return NotFound("Company not found.");
+
+        var domain = (req.EmailDomain ?? "").Trim().TrimStart('@').ToLowerInvariant();
+        if (string.IsNullOrWhiteSpace(domain)) return BadRequest("emailDomain is required, e.g. \"gmail.com\".");
+
+        var matched = (await _store.GetUsersAsync())
+            .Where(u => u.Role != Roles.SuperAdmin && u.Email.ToLowerInvariant().EndsWith("@" + domain))
+            .ToList();
+
+        foreach (var u in matched)
+        {
+            u.CompanyId = id;
+            await _store.UpdateUserAsync(u);
+        }
+
+        await _store.AddAuditLogAsync(new AuditLog
+        {
+            CompanyId = id, ActorEmail = User.FindFirstValue(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Email) ?? "",
+            ActorDisplayName = "SuperAdmin", Action = "UsersBulkAssignedByDomain",
+            TargetDescription = company.Name,
+            DetailsJson = System.Text.Json.JsonSerializer.Serialize(new { domain, matchedCount = matched.Count, emails = matched.Select(u => u.Email) })
+        });
+
+        return new AssignUsersByDomainResult(matched.Count, matched.Select(u => u.Email).ToList());
+    }
 }
