@@ -39,6 +39,7 @@
   th,td{ text-align:left; padding:8px 10px; border-bottom:1px solid var(--border); vertical-align:top; }
   th{ color:var(--text-2); font-weight:600; font-size:12px; background:var(--bg-soft); }
   tr.row:hover{ background:var(--bg-soft); cursor:pointer; }
+  tr.module-master-row:hover{ background:var(--bg-soft); cursor:pointer; }
   .badge{ display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:600; }
   .b-draft{ background:#f1eee0; color:#856404; }
   .b-reviewed{ background:#e6f1fb; color:#185fa5; }
@@ -443,13 +444,14 @@ let state = {
   showAddTestCase: false,
   showAddTaskLink: null,
   showExportPicker: false,
-  moduleListOpen: false,
-  moduleSearch: '',
+
   sidebarCollapsed: false,
   automationMenuOpen: false,
   adminMenuOpen: false,
   testCaseMasterOpen: true,
-  modulesListOpen: true,
+  showModuleMaster: false,
+  moduleMasterSearch: '',
+  moduleMasterPage: 1,
   showImport: false,
   importStep: 1,
   importHeaders: [],
@@ -508,13 +510,14 @@ let state = {
 };
 
 function closeAllPanels(){
+  state.showModuleMaster = false;
+  state.moduleMasterSearch = '';
+  state.moduleMasterPage = 1;
   state.showAddModule = false;
   state.showAddTestCase = false;
   state.editingId = null;
   state.showAddTaskLink = null;
   state.showExportPicker = false;
-  state.moduleListOpen = false;
-  state.moduleSearch = '';
   state.showImport = false;
   state.importStep = 1;
   state.importHeaders = [];
@@ -622,8 +625,7 @@ async function refreshModules(){
 }
 async function selectModule(id){
   state.moduleFilter = id;
-  state.moduleListOpen = false;
-  state.moduleSearch = '';
+  state.showModuleMaster = false;
   render();
   try{
     await loadModuleData(id);
@@ -884,6 +886,7 @@ function render(){
     <div class="layout">
       ${renderSidebar()}
       <div class="main">
+        ${state.showModuleMaster ? renderModuleMaster() : ''}
         ${state.showAddModule ? renderAddModuleForm() : ''}
         ${state.showAddTaskLink ? renderAddTaskLinkForm(state.showAddTaskLink) : ''}
         ${state.showAddTestCase || state.editingId ? renderTestCaseForm() : ''}
@@ -916,7 +919,7 @@ function renderMainArea(){
 }
 
 function isAnyPanelOpen(){
-  return state.showAddModule || state.showAddTestCase || !!state.editingId || !!state.showAddTaskLink || state.showExportPicker || state.showImport ||
+  return state.showModuleMaster || state.showAddModule || state.showAddTestCase || !!state.editingId || !!state.showAddTaskLink || state.showExportPicker || state.showImport ||
     state.showManageUsers || state.showInviteLinks || state.showAuditLog || state.showNotifications || state.showSuites || state.showReleases || state.showTestRuns || state.showReports ||
     state.showApiKeys || state.showEnvironments || state.showDuplicates || state.showBulkEdit;
 }
@@ -1853,18 +1856,6 @@ function iconForModule(m){
 // currently open module stays highlighted here until a different one is picked.
 function renderSidebar(){
   const collapsed = !!state.sidebarCollapsed;
-  const q = state.moduleSearch.trim().toLowerCase();
-  const modules = DATA.modules.filter(m => !q || m.name.toLowerCase().includes(q) || m.code.toLowerCase().includes(q));
-
-  const searchRow = collapsed ? '' : `<div class="sidebar-sub"><input type="search" id="moduleSearchBox" placeholder="Search module by name or code" value="${escapeHtml(state.moduleSearch)}"></div>`;
-
-  const moduleRows = modules.length ? modules.map(m => `
-    <div class="sidebar-item sub-item ${state.moduleFilter===m.id?'active':''}" data-mod="${m.id}" title="${escapeHtml(m.name)} (${escapeHtml(m.code)})">
-      <span class="item-icon">${iconForModule(m)}</span>
-      <span class="item-text">${escapeHtml(m.name)}<br><small>${escapeHtml(m.code)} · ${escapeHtml(m.status)}</small></span>
-      <span class="count item-text">${tcCountForModule(m.id)}</span>
-    </div>
-  `).join('') : (collapsed ? '' : '<div class="muted item-text" style="padding:8px 4px;font-size:12px;">No modules match your search.</div>');
 
   return `
     <div class="sidebar ${collapsed ? 'collapsed' : ''}">
@@ -1872,16 +1863,9 @@ function renderSidebar(){
         <span class="item-icon">🗄️</span><span class="item-text">Test Case Master ${state.testCaseMasterOpen ? '▾' : '▸'}</span>
       </div>
       ${state.testCaseMasterOpen ? `
-      <div class="sidebar-item menu-item sub-item ${state.moduleFilter==='all'?'active':''}" id="menuAllModules" title="All Module test cases">
-        <span class="item-icon">📋</span><span class="item-text">All Module test cases</span>
+      <div class="sidebar-item menu-item sub-item ${state.showModuleMaster?'active':''}" id="menuModulesList" title="Module Master">
+        <span class="item-icon">🗂️</span><span class="item-text">Module Master</span>
       </div>
-      <div class="sidebar-item menu-item sub-item" id="menuModulesList" title="Modules List">
-        <span class="item-icon">🗂️</span><span class="item-text">Modules List ${state.modulesListOpen ? '▾' : '▸'}</span>
-      </div>
-      ${state.modulesListOpen ? `
-      ${searchRow}
-      <div class="module-list">${moduleRows}</div>
-      ` : ''}
       ${canEditContent() ? `<div class="sidebar-item menu-item sub-item" id="menuAddModule" title="Add module"><span class="item-icon">➕</span><span class="item-text">Add module</span></div>` : ''}
       ${canEditContent() ? `<div class="sidebar-item menu-item sub-item" id="menuAddTestCase" title="Add test case"><span class="item-icon">📝</span><span class="item-text">Add test case</span></div>` : ''}
       ${canEditContent() ? `<div class="sidebar-item menu-item sub-item" id="menuImport" title="Import from spreadsheet"><span class="item-icon">📥</span><span class="item-text">Import from spreadsheet</span></div>` : ''}
@@ -2024,6 +2008,47 @@ function renderDetail(tc){
         ${canEditContent() && tc.status !== 'Deprecated' ? `<button class="small ghost" data-deprecate="${tc.id}">Mark deprecated</button>` : ''}
         <button class="small ghost" data-close="1">Close</button>
       </div>
+    </div>
+  `;
+}
+
+const MODULE_MASTER_PAGE_SIZE = 10;
+function renderModuleMaster(){
+  const q = state.moduleMasterSearch.trim().toLowerCase();
+  const filtered = DATA.modules.filter(m => !q || m.name.toLowerCase().includes(q) || m.code.toLowerCase().includes(q));
+  const totalPages = Math.max(1, Math.ceil(filtered.length / MODULE_MASTER_PAGE_SIZE));
+  const page = Math.min(Math.max(1, state.moduleMasterPage), totalPages);
+  const start = (page - 1) * MODULE_MASTER_PAGE_SIZE;
+  const pageItems = filtered.slice(start, start + MODULE_MASTER_PAGE_SIZE);
+
+  const rows = pageItems.length ? pageItems.map(m => `
+    <tr class="module-master-row" data-mod="${m.id}" style="cursor:pointer;">
+      <td>${iconForModule(m)} ${escapeHtml(m.name)}</td>
+      <td>${escapeHtml(m.code)}</td>
+      <td>${escapeHtml(m.status)}</td>
+      <td>${tcCountForModule(m.id)}</td>
+    </tr>
+  `).join('') : `<tr><td colspan="4" class="empty">No modules match your search.</td></tr>`;
+
+  return `
+    <div class="panel">
+      <h3>Module Master</h3>
+      <p class="sub" style="margin-top:-6px;">All modules — click a row to open its test cases.</p>
+      <div class="toolbar">
+        <input type="search" id="moduleMasterSearchBox" placeholder="Search module by name or code" value="${escapeHtml(state.moduleMasterSearch)}" style="min-width:220px;">
+      </div>
+      <table style="margin-top:10px;">
+        <thead><tr><th>Module</th><th>Code</th><th>Status</th><th>Test cases</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <div class="actions-row" style="margin-top:10px;justify-content:space-between;">
+        <span class="muted" style="font-size:12px;">Page ${page} of ${totalPages} (${filtered.length} module${filtered.length===1?'':'s'})</span>
+        <span>
+          <button type="button" class="small ghost" id="moduleMasterPrev" ${page<=1?'disabled':''}>Previous</button>
+          <button type="button" class="small ghost" id="moduleMasterNext" ${page>=totalPages?'disabled':''}>Next</button>
+        </span>
+      </div>
+      <div class="actions-row"><button type="button" class="ghost" id="closeModuleMaster">Close</button></div>
     </div>
   `;
 }
@@ -2252,12 +2277,6 @@ function wireEvents(){
   const hamburgerBtn = document.getElementById('hamburgerBtn');
   if(hamburgerBtn) hamburgerBtn.addEventListener('click', () => { state.sidebarCollapsed = !state.sidebarCollapsed; render(); });
 
-  const menuAllModules = document.getElementById('menuAllModules');
-  if(menuAllModules) menuAllModules.addEventListener('click', () => { closeAllPanels(); state.moduleFilter = 'all'; render(); });
-
-  const moduleSearchBox = document.getElementById('moduleSearchBox');
-  if(moduleSearchBox) moduleSearchBox.addEventListener('input', e => { state.moduleSearch = e.target.value; render(); });
-
   const menuAddModule = document.getElementById('menuAddModule');
   if(menuAddModule) menuAddModule.addEventListener('click', () => { const next = !state.showAddModule; closeAllPanels(); state.showAddModule = next; render(); });
 
@@ -2366,9 +2385,33 @@ function wireEvents(){
 
   const menuModulesList = document.getElementById('menuModulesList');
   if(menuModulesList) menuModulesList.addEventListener('click', () => {
-    state.modulesListOpen = !state.modulesListOpen;
+    const next = !state.showModuleMaster;
+    closeAllPanels();
+    state.showModuleMaster = next;
     render();
   });
+
+  const moduleMasterSearchBox = document.getElementById('moduleMasterSearchBox');
+  if(moduleMasterSearchBox) moduleMasterSearchBox.addEventListener('input', e => {
+    state.moduleMasterSearch = e.target.value;
+    state.moduleMasterPage = 1;
+    render();
+  });
+
+  const moduleMasterPrev = document.getElementById('moduleMasterPrev');
+  if(moduleMasterPrev) moduleMasterPrev.addEventListener('click', () => { state.moduleMasterPage = Math.max(1, state.moduleMasterPage - 1); render(); });
+
+  const moduleMasterNext = document.getElementById('moduleMasterNext');
+  if(moduleMasterNext) moduleMasterNext.addEventListener('click', () => { state.moduleMasterPage = state.moduleMasterPage + 1; render(); });
+
+  const closeModuleMaster = document.getElementById('closeModuleMaster');
+  if(closeModuleMaster) closeModuleMaster.addEventListener('click', () => { state.showModuleMaster = false; render(); });
+
+  if(state.showModuleMaster){
+    document.querySelectorAll('tr.module-master-row').forEach(el => el.addEventListener('click', () => {
+      selectModule(el.dataset.mod);
+    }));
+  }
 
   const menuAutomationGroup = document.getElementById('menuAutomationGroup');
   if(menuAutomationGroup) menuAutomationGroup.addEventListener('click', () => {
