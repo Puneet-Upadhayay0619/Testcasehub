@@ -448,6 +448,8 @@ let state = {
   sidebarCollapsed: false,
   automationMenuOpen: false,
   adminMenuOpen: false,
+  testCaseMasterOpen: true,
+  modulesListOpen: true,
   showImport: false,
   importStep: 1,
   importHeaders: [],
@@ -1866,17 +1868,27 @@ function renderSidebar(){
 
   return `
     <div class="sidebar ${collapsed ? 'collapsed' : ''}">
-      <div class="sidebar-item menu-item ${state.moduleFilter==='all'?'active':''}" id="menuAllModules" title="All Module test cases">
+      <div class="sidebar-item menu-item" id="menuTestCaseMasterGroup" title="Test Case Master">
+        <span class="item-icon">🗄️</span><span class="item-text">Test Case Master ${state.testCaseMasterOpen ? '▾' : '▸'}</span>
+      </div>
+      ${state.testCaseMasterOpen ? `
+      <div class="sidebar-item menu-item sub-item ${state.moduleFilter==='all'?'active':''}" id="menuAllModules" title="All Module test cases">
         <span class="item-icon">📋</span><span class="item-text">All Module test cases</span>
       </div>
+      <div class="sidebar-item menu-item sub-item" id="menuModulesList" title="Modules List">
+        <span class="item-icon">🗂️</span><span class="item-text">Modules List ${state.modulesListOpen ? '▾' : '▸'}</span>
+      </div>
+      ${state.modulesListOpen ? `
       ${searchRow}
       <div class="module-list">${moduleRows}</div>
-      ${canEditContent() ? `<div class="sidebar-item menu-item" id="menuAddModule" title="Add module"><span class="item-icon">➕</span><span class="item-text">Add module</span></div>` : ''}
-      ${canEditContent() ? `<div class="sidebar-item menu-item" id="menuAddTestCase" title="Add test case"><span class="item-icon">📝</span><span class="item-text">Add test case</span></div>` : ''}
-      ${canEditContent() ? `<div class="sidebar-item menu-item" id="menuImport" title="Import from spreadsheet"><span class="item-icon">📥</span><span class="item-text">Import from spreadsheet</span></div>` : ''}
-      <div class="sidebar-item menu-item" id="menuDownload" title="Download test cases"><span class="item-icon">📤</span><span class="item-text">Download test cases${exportScopeLabel()}</span></div>
-      ${canEditContent() ? `<div class="sidebar-item menu-item" id="menuDuplicates" title="Find duplicate test cases"><span class="item-icon">🔎</span><span class="item-text">Find duplicates</span></div>` : ''}
-      ${canEditContent() ? `<div class="sidebar-item menu-item" id="menuBulkEdit" title="Bulk edit test cases"><span class="item-icon">🧮</span><span class="item-text">Bulk edit</span></div>` : ''}
+      ` : ''}
+      ${canEditContent() ? `<div class="sidebar-item menu-item sub-item" id="menuAddModule" title="Add module"><span class="item-icon">➕</span><span class="item-text">Add module</span></div>` : ''}
+      ${canEditContent() ? `<div class="sidebar-item menu-item sub-item" id="menuAddTestCase" title="Add test case"><span class="item-icon">📝</span><span class="item-text">Add test case</span></div>` : ''}
+      ${canEditContent() ? `<div class="sidebar-item menu-item sub-item" id="menuImport" title="Import from spreadsheet"><span class="item-icon">📥</span><span class="item-text">Import from spreadsheet</span></div>` : ''}
+      <div class="sidebar-item menu-item sub-item" id="menuDownload" title="Download test cases"><span class="item-icon">📤</span><span class="item-text">Download test cases${exportScopeLabel()}</span></div>
+      ${canEditContent() ? `<div class="sidebar-item menu-item sub-item" id="menuDuplicates" title="Find duplicate test cases"><span class="item-icon">🔎</span><span class="item-text">Find duplicates</span></div>` : ''}
+      ${canEditContent() ? `<div class="sidebar-item menu-item sub-item" id="menuBulkEdit" title="Bulk edit test cases"><span class="item-icon">🧮</span><span class="item-text">Bulk edit</span></div>` : ''}
+      ` : ''}
       <div class="sidebar-item menu-item" id="menuReleases" title="Releases"><span class="item-icon">🚀</span><span class="item-text">Releases</span></div>
       <div class="sidebar-item menu-item" id="menuAutomationGroup" title="Automation">
         <span class="item-icon">🤖</span><span class="item-text">Automation ${state.automationMenuOpen ? '▾' : '▸'}</span>
@@ -2346,6 +2358,18 @@ function wireEvents(){
   }));
 
   // ---------------- Test Suites ----------------
+  const menuTestCaseMasterGroup = document.getElementById('menuTestCaseMasterGroup');
+  if(menuTestCaseMasterGroup) menuTestCaseMasterGroup.addEventListener('click', () => {
+    state.testCaseMasterOpen = !state.testCaseMasterOpen;
+    render();
+  });
+
+  const menuModulesList = document.getElementById('menuModulesList');
+  if(menuModulesList) menuModulesList.addEventListener('click', () => {
+    state.modulesListOpen = !state.modulesListOpen;
+    render();
+  });
+
   const menuAutomationGroup = document.getElementById('menuAutomationGroup');
   if(menuAutomationGroup) menuAutomationGroup.addEventListener('click', () => {
     state.automationMenuOpen = !state.automationMenuOpen;
