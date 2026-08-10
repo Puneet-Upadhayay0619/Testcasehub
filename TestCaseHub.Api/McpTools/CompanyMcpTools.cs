@@ -207,4 +207,30 @@ public class CompanyMcpTools
             testCasesMoved = testCaseCount, teamLinksRemoved = staleTeamIds.Count
         };
     }
+
+    [McpServerTool(Name = "create_team"), Description(
+        "Admin (own company, companyId optional) or SuperAdmin (any company, companyId required). " +
+        "Creates a new team inside a company -- teams are how you group users and share modules between them.")]
+    public async Task<object> CreateTeam(ClaimsPrincipal user, [Description("Team name, e.g. 'OneWorld Test'")] string name, int? companyId = null, string? description = null)
+    {
+        // Same rule as the REST POST /api/teams endpoint -- Admin role or above, company resolved
+        // the same way (SuperAdmin must pass companyId explicitly; everyone else uses their own).
+        if (!user.CanManageTeams())
+            return new { error = "You do not have permission to manage teams (Admin role or above required)." };
+
+        var resolved = user.ResolveActingCompanyId(companyId);
+        if (resolved is null)
+            return new { error = user.IsSuperAdmin() ? "SuperAdmin must specify companyId." : "You have no company." };
+
+        if (string.IsNullOrWhiteSpace(name))
+            return new { error = "Team name is required." };
+
+        var company = await _store.GetCompanyAsync(resolved.Value);
+        if (company is null) return new { error = "Company not found." };
+
+        var team = new Team { CompanyId = resolved.Value, Name = name.Trim(), Description = description ?? "", CreatedBy = EmailOf(user) };
+        team = await _store.CreateTeamAsync(team);
+
+        return new TeamResponse(team.Id, team.CompanyId, team.Name, team.Description, team.CreatedBy, team.CreatedAt, new List<int>(), new List<int>());
+    }
 }
