@@ -87,6 +87,10 @@ public class TestCaseMcpTools
         string? adoTaskTitle = null,
         string? adoTaskUrl = null)
     {
+        // Same rule, same order, as the REST POST /api/modules/{id}/task-links endpoint.
+        if (!user.CanEditTaskLinks())
+            return new { error = "You do not have permission to link tasks (Contributor role or above required)." };
+
         var module = await _store.GetModuleAsync(moduleId);
         if (module is null) return new { error = "Module not found." };
         if (!user.HasCompanyAccess(module.CompanyId)) return new { error = "Module not found." };
@@ -102,8 +106,14 @@ public class TestCaseMcpTools
     }
 
     [McpServerTool(Name = "list_task_links"), Description("List the linked tasks/tickets for a module.")]
-    public async Task<List<TaskLinkResponse>> ListTaskLinks(int moduleId)
+    public async Task<object> ListTaskLinks(ClaimsPrincipal user, int moduleId)
     {
+        // Same company check as the REST GET /api/modules/{id}/task-links endpoint -- read access
+        // is open to every role, but only within the caller's own company.
+        var module = await _store.GetModuleAsync(moduleId);
+        if (module is null) return new { error = "Module not found." };
+        if (!user.HasCompanyAccess(module.CompanyId)) return new { error = "Module not found." };
+
         var links = await _store.GetTaskLinksAsync(moduleId);
         return links.Select(l => new TaskLinkResponse(l.Id, l.ModuleId, l.Layer, l.AdoProject, l.AdoTaskId, l.AdoTaskTitle, l.AdoTaskUrl, l.LinkedAt)).ToList();
     }
@@ -114,8 +124,12 @@ public class TestCaseMcpTools
     public Task<List<string>> ListPriorities() => _store.GetPrioritiesAsync();
 
     [McpServerTool(Name = "add_priority"), Description("Add a new custom priority value (e.g. 'P0') so it's usable by everyone from now on.")]
-    public async Task<object> AddPriority(string value)
+    public async Task<object> AddPriority(ClaimsPrincipal user, string value)
     {
+        // Same rule as the REST POST /api/lookups/priorities endpoint -- Contributor role or above.
+        if (!user.CanEditTestCases())
+            return new { error = "You do not have permission to add priorities (Contributor role or above required)." };
+
         value = (value ?? "").Trim();
         if (string.IsNullOrWhiteSpace(value)) return new { error = "Value is required." };
         if (await _store.PriorityExistsAsync(value)) return new { error = "This priority already exists." };
@@ -127,8 +141,12 @@ public class TestCaseMcpTools
     public Task<List<string>> ListStatuses() => _store.GetStatusesAsync();
 
     [McpServerTool(Name = "add_status"), Description("Add a new custom status value so it's usable by everyone from now on.")]
-    public async Task<object> AddStatus(string value)
+    public async Task<object> AddStatus(ClaimsPrincipal user, string value)
     {
+        // Same rule as the REST POST /api/lookups/statuses endpoint -- Contributor role or above.
+        if (!user.CanEditTestCases())
+            return new { error = "You do not have permission to add statuses (Contributor role or above required)." };
+
         value = (value ?? "").Trim();
         if (string.IsNullOrWhiteSpace(value)) return new { error = "Value is required." };
         if (await _store.StatusExistsAsync(value)) return new { error = "This status already exists." };
@@ -194,6 +212,10 @@ public class TestCaseMcpTools
         ClaimsPrincipal user,
         [Description("Optional note for the history log, e.g. 'Generated from backlog PBI-02'")] string? historyComment = null)
     {
+        // Same rule as the REST POST /api/testcases endpoint -- Contributor role or above.
+        if (!user.CanEditTestCases())
+            return new { error = "You do not have permission to create test cases (Contributor role or above required)." };
+
         var req = new TestCaseCreateRequest(moduleId, layer, verificationType, title, preconditions ?? "",
             steps ?? new(), priority, type, status, tags ?? new(), automationReady, automationScriptRef ?? "", historyComment);
         var module = await _store.GetModuleAsync(req.ModuleId);
@@ -248,6 +270,10 @@ public class TestCaseMcpTools
         string? automationScriptRef,
         string? historyComment = null)
     {
+        // Same rule as the REST PUT /api/testcases/{id} endpoint -- Contributor role or above.
+        if (!user.CanEditTestCases())
+            return new { error = "You do not have permission to update test cases (Contributor role or above required)." };
+
         var tc = await _store.GetTestCaseAsync(id);
         if (tc is null) return new { error = "Not found." };
         var existingModule = await _store.GetModuleAsync(tc.ModuleId);
@@ -285,6 +311,10 @@ public class TestCaseMcpTools
     [McpServerTool(Name = "deprecate_test_case"), Description("Mark a test case as Deprecated.")]
     public async Task<object> DeprecateTestCase(string id, ClaimsPrincipal user)
     {
+        // Same rule as the REST POST /api/testcases/{id}/deprecate endpoint -- Contributor role or above.
+        if (!user.CanEditTestCases())
+            return new { error = "You do not have permission to deprecate test cases (Contributor role or above required)." };
+
         var tc = await _store.GetTestCaseAsync(id);
         if (tc is null) return new { error = "Not found." };
         var module = await _store.GetModuleAsync(tc.ModuleId);
