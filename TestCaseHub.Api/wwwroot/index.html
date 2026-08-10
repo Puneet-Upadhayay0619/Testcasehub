@@ -447,6 +447,7 @@ let state = {
   moduleSearch: '',
   sidebarCollapsed: false,
   automationMenuOpen: false,
+  adminMenuOpen: false,
   showImport: false,
   importStep: 1,
   importHeaders: [],
@@ -1887,9 +1888,16 @@ function renderSidebar(){
       ${(AUTH && AUTH.role === 'Admin') ? `<div class="sidebar-item menu-item sub-item" id="menuApiKeys" title="API Keys"><span class="item-icon">🔑</span><span class="item-text">API Keys</span></div>` : ''}
       ${(AUTH && AUTH.role === 'Admin') ? `<div class="sidebar-item menu-item sub-item" id="menuEnvironments" title="Environment Targets"><span class="item-icon">🌐</span><span class="item-text">Environment Targets</span></div>` : ''}
       ` : ''}
-      ${(AUTH && AUTH.role === 'Admin') ? `<div class="sidebar-item menu-item" id="menuManageUsers" title="Manage Users"><span class="item-icon">🛡️</span><span class="item-text">Manage Users</span></div>` : ''}
-      ${(AUTH && AUTH.role === 'Admin') ? `<div class="sidebar-item menu-item" id="menuInviteLinks" title="Invite Links"><span class="item-icon">🎟️</span><span class="item-text">Invite Links</span></div>` : ''}
-      ${(AUTH && AUTH.role === 'Admin') ? `<div class="sidebar-item menu-item" id="menuAuditLog" title="Audit Log"><span class="item-icon">📜</span><span class="item-text">Audit Log</span></div>` : ''}
+      ${(AUTH && AUTH.role === 'Admin') ? `
+      <div class="sidebar-item menu-item" id="menuAdminGroup" title="Admin Activity">
+        <span class="item-icon">🛡️</span><span class="item-text">Admin Activity ${state.adminMenuOpen ? '▾' : '▸'}</span>
+      </div>
+      ${state.adminMenuOpen ? `
+      <div class="sidebar-item menu-item sub-item" id="menuManageUsers" title="Manage Users"><span class="item-icon">👥</span><span class="item-text">Manage Users</span></div>
+      <div class="sidebar-item menu-item sub-item" id="menuInviteLinks" title="Invite Links"><span class="item-icon">🎟️</span><span class="item-text">Invite Links</span></div>
+      <div class="sidebar-item menu-item sub-item" id="menuAuditLog" title="Audit Log"><span class="item-icon">📜</span><span class="item-text">Audit Log</span></div>
+      ` : ''}
+      ` : ''}
     </div>
   `;
 }
@@ -2341,6 +2349,12 @@ function wireEvents(){
   const menuAutomationGroup = document.getElementById('menuAutomationGroup');
   if(menuAutomationGroup) menuAutomationGroup.addEventListener('click', () => {
     state.automationMenuOpen = !state.automationMenuOpen;
+    render();
+  });
+
+  const menuAdminGroup = document.getElementById('menuAdminGroup');
+  if(menuAdminGroup) menuAdminGroup.addEventListener('click', () => {
+    state.adminMenuOpen = !state.adminMenuOpen;
     render();
   });
 
