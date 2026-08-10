@@ -22,15 +22,21 @@ public class SuitesController : ControllerBase
     private string CurrentUserDisplayName => User.FindFirstValue("displayName") ?? "Unknown";
 
     [HttpGet]
-    public async Task<ActionResult<List<SuiteResponse>>> GetAll() =>
-        (await _store.GetSuitesAsync()).Select(SuiteResponse.From).ToList();
+    public async Task<ActionResult<List<SuiteResponse>>> GetAll([FromQuery] int? companyId = null)
+    {
+        var effective = User.IsSuperAdmin() ? companyId : User.GetCompanyId();
+        if (effective is null) return User.IsSuperAdmin() ? BadRequest("SuperAdmin must specify ?companyId=.") : Forbid();
+        return (await _store.GetSuitesAsync()).Where(s => s.CompanyId == effective).Select(SuiteResponse.From).ToList();
+    }
 
     [HttpPost("static")]
-    public async Task<ActionResult<SuiteResponse>> CreateStatic(CreateStaticSuiteRequest req)
+    public async Task<ActionResult<SuiteResponse>> CreateStatic(CreateStaticSuiteRequest req, [FromQuery] int? companyId = null)
     {
         if (!User.CanManageSuites()) return Forbid();
+        companyId = User.ResolveActingCompanyId(companyId);
+        if (companyId is null) return User.IsSuperAdmin() ? BadRequest("SuperAdmin must specify ?companyId=.") : Forbid();
         if (string.IsNullOrWhiteSpace(req.Name)) return BadRequest("Suite name is required.");
-        var suite = new TestSuite { Name = req.Name.Trim(), Description = req.Description ?? "", Kind = "Static", CreatedBy = CurrentUserDisplayName };
+        var suite = new TestSuite { CompanyId = companyId.Value, Name = req.Name.Trim(), Description = req.Description ?? "", Kind = "Static", CreatedBy = CurrentUserDisplayName };
         suite.TestCaseIds = req.TestCaseIds ?? new();
         suite = await _store.CreateSuiteAsync(suite);
         return SuiteResponse.From(suite);
@@ -42,14 +48,16 @@ public class SuitesController : ControllerBase
     private record DynamicFilter(int? ModuleId, string? Layer, string? VerificationType, string? Status, string? Priority, string? Tag, string? Search);
 
     [HttpPost("dynamic")]
-    public async Task<ActionResult<SuiteResponse>> CreateDynamic(CreateDynamicSuiteRequest req)
+    public async Task<ActionResult<SuiteResponse>> CreateDynamic(CreateDynamicSuiteRequest req, [FromQuery] int? companyId = null)
     {
         if (!User.CanManageSuites()) return Forbid();
+        companyId = User.ResolveActingCompanyId(companyId);
+        if (companyId is null) return User.IsSuperAdmin() ? BadRequest("SuperAdmin must specify ?companyId=.") : Forbid();
         if (string.IsNullOrWhiteSpace(req.Name)) return BadRequest("Suite name is required.");
         var filter = new DynamicFilter(req.ModuleId, req.Layer, req.VerificationType, req.Status, req.Priority, req.Tag, req.Search);
         var suite = new TestSuite
         {
-            Name = req.Name.Trim(), Description = req.Description ?? "", Kind = "Dynamic",
+            CompanyId = companyId.Value, Name = req.Name.Trim(), Description = req.Description ?? "", Kind = "Dynamic",
             FilterJson = System.Text.Json.JsonSerializer.Serialize(filter), CreatedBy = CurrentUserDisplayName
         };
         suite = await _store.CreateSuiteAsync(suite);
@@ -64,6 +72,7 @@ public class SuitesController : ControllerBase
     {
         var suite = await _store.GetSuiteAsync(id);
         if (suite is null) return NotFound();
+        if (!User.HasCompanyAccess(suite.CompanyId)) return Forbid();
 
         if (suite.Kind == "Static")
         {

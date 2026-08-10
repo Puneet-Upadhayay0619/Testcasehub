@@ -25,11 +25,16 @@ public class UsersController : ControllerBase
     private string ActorDisplayName => User.FindFirstValue("displayName") ?? "Unknown";
 
     [HttpGet]
-    public async Task<ActionResult<List<UserResponse>>> GetAll()
+    public async Task<ActionResult<List<UserResponse>>> GetAll([FromQuery] int? companyId = null)
     {
         if (!User.CanManageUsers()) return Forbid();
-        var users = await _store.GetUsersAsync();
-        return users.OrderBy(u => u.Id).Select(UserResponse.From).ToList();
+        var effective = User.IsSuperAdmin() ? companyId : User.GetCompanyId();
+        if (effective is null) return User.IsSuperAdmin() ? BadRequest("SuperAdmin must specify ?companyId=.") : Forbid();
+        var users = (await _store.GetUsersAsync()).Where(u => u.CompanyId == effective).ToList();
+        var result = new List<UserResponse>();
+        foreach (var u in users.OrderBy(u => u.Id))
+            result.Add(UserResponse.From(u, await _store.GetTeamIdsForUserAsync(u.Id)));
+        return result;
     }
 
     [HttpPut("{id:int}/access")]
@@ -37,9 +42,13 @@ public class UsersController : ControllerBase
     {
         if (!User.CanManageUsers()) return Forbid();
         if (!Roles.IsValid(req.Role)) return BadRequest("Role must be one of Admin, Lead, Contributor, Viewer.");
+        // Only SuperAdmin can grant/hold SuperAdmin -- an ordinary Admin can't promote anyone
+        // (including themselves) above their own company's ceiling.
+        if (req.Role == Roles.SuperAdmin && !User.IsSuperAdmin()) return Forbid();
 
         var target = await _store.GetUserByIdAsync(id);
         if (target is null) return NotFound();
+        if (target.CompanyId is not null && !User.HasCompanyAccess(target.CompanyId.Value)) return Forbid();
 
         var before = new { target.Role, target.LayerScope, target.ModuleScope };
         target.Role = req.Role;
@@ -63,6 +72,7 @@ public class UsersController : ControllerBase
         if (!User.CanManageUsers()) return Forbid();
         var target = await _store.GetUserByIdAsync(id);
         if (target is null) return NotFound();
+        if (target.CompanyId is not null && !User.HasCompanyAccess(target.CompanyId.Value)) return Forbid();
         if (target.Role == Roles.Admin && target.IsActive)
         {
             // Extra guard: don't let the last active Admin deactivate themselves into a
@@ -89,6 +99,7 @@ public class UsersController : ControllerBase
         if (!User.CanManageUsers()) return Forbid();
         var target = await _store.GetUserByIdAsync(id);
         if (target is null) return NotFound();
+        if (target.CompanyId is not null && !User.HasCompanyAccess(target.CompanyId.Value)) return Forbid();
 
         target.IsActive = true;
         target = await _store.UpdateUserAsync(target);
@@ -101,10 +112,12 @@ public class UsersController : ControllerBase
     }
 
     [HttpGet("audit-log")]
-    public async Task<ActionResult<List<AuditLogResponse>>> GetAuditLog()
+    public async Task<ActionResult<List<AuditLogResponse>>> GetAuditLog([FromQuery] int? companyId = null)
     {
         if (!User.CanManageUsers()) return Forbid();
         var logs = await _store.GetAuditLogsAsync();
+        var effective = User.IsSuperAdmin() ? companyId : User.GetCompanyId();
+        logs = logs.Where(l => l.CompanyId == effective).ToList();
         return logs.Select(l => new AuditLogResponse(l.Id, l.ActorEmail, l.ActorDisplayName, l.Action, l.TargetDescription, l.DetailsJson, l.OccurredAt)).ToList();
     }
 }

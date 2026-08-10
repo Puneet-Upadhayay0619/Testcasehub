@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using TestCaseHub.Api.Dtos;
 using TestCaseHub.Api.Services;
 using TestCaseHub.Api.Storage;
+using TestCaseHub.Api.Models;
 
 namespace TestCaseHub.Api.Controllers;
 
@@ -18,9 +19,11 @@ public class ReportsController : ControllerBase
     // least one Pass result, across all test runs ever. A simple, honest coverage number —
     // "has this actually been verified to pass at least once", not "does a script exist for it".
     [HttpGet("coverage")]
-    public async Task<ActionResult<List<CoverageRow>>> Coverage()
+    public async Task<ActionResult<List<CoverageRow>>> Coverage([FromQuery] int? companyId = null)
     {
-        var modules = await _store.GetModulesAsync();
+        var effective = User.IsSuperAdmin() ? companyId : User.GetCompanyId();
+        if (effective is null) return User.IsSuperAdmin() ? BadRequest("SuperAdmin must specify ?companyId=.") : Forbid();
+        var modules = (await _store.GetModulesAsync()).Where(m => m.CompanyId == effective).ToList();
         var rows = new List<CoverageRow>();
         foreach (var m in modules)
         {
@@ -41,9 +44,11 @@ public class ReportsController : ControllerBase
     // Release-over-release pass-rate trend — "kaunsa module sabse zyada flaky/fail hota hai"
     // type analysis starts from this same per-release number.
     [HttpGet("trend")]
-    public async Task<ActionResult<List<ReleaseTrendPoint>>> Trend()
+    public async Task<ActionResult<List<ReleaseTrendPoint>>> Trend([FromQuery] int? companyId = null)
     {
-        var releases = await _store.GetReleasesAsync();
+        var effective = User.IsSuperAdmin() ? companyId : User.GetCompanyId();
+        if (effective is null) return User.IsSuperAdmin() ? BadRequest("SuperAdmin must specify ?companyId=.") : Forbid();
+        var releases = (await _store.GetReleasesAsync()).Where(r => r.CompanyId == effective).ToList();
         var points = new List<ReleaseTrendPoint>();
         foreach (var r in releases.OrderBy(r => r.CreatedAt))
         {

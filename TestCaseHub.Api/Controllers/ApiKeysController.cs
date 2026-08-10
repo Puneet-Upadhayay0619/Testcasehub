@@ -23,19 +23,25 @@ public class ApiKeysController : ControllerBase
     private string ActorDisplayName => User.FindFirstValue("displayName") ?? "Unknown";
 
     [HttpGet]
-    public async Task<ActionResult<List<ApiKeyResponse>>> GetAll()
+    public async Task<ActionResult<List<ApiKeyResponse>>> GetAll([FromQuery] int? companyId = null)
     {
         if (!User.CanManageUsers()) return Forbid(); // same "Admin only" gate as user management
-        return (await _store.GetApiKeysAsync()).Select(ApiKeyResponse.From).ToList();
+        var effective = User.IsSuperAdmin() ? companyId : User.GetCompanyId();
+        if (effective is null) return User.IsSuperAdmin() ? BadRequest("SuperAdmin must specify ?companyId=.") : Forbid();
+        return (await _store.GetApiKeysAsync()).Where(k => k.CompanyId == effective).Select(ApiKeyResponse.From).ToList();
     }
 
     [HttpPost]
-    public async Task<ActionResult<IssuedApiKeyResponse>> Create(CreateApiKeyRequest req)
+    public async Task<ActionResult<IssuedApiKeyResponse>> Create(CreateApiKeyRequest req, [FromQuery] int? companyId = null)
     {
         if (!User.CanManageUsers()) return Forbid();
+        companyId = User.ResolveActingCompanyId(companyId);
+        if (companyId is null) return User.IsSuperAdmin() ? BadRequest("SuperAdmin must specify ?companyId=.") : Forbid();
         if (string.IsNullOrWhiteSpace(req.Name)) return BadRequest("A name is required (e.g. 'Azure DevOps CI').");
 
         var (raw, key) = await _keys.IssueAsync(req.Name.Trim(), req.Scope ?? "ReportResults", ActorDisplayName);
+        key.CompanyId = companyId.Value;
+        key = await _store.UpdateApiKeyAsync(key);
         await _store.AddAuditLogAsync(new AuditLog
         {
             ActorEmail = ActorEmail, ActorDisplayName = ActorDisplayName, Action = "ApiKeyCreated",
@@ -51,6 +57,7 @@ public class ApiKeysController : ControllerBase
         if (!User.CanManageUsers()) return Forbid();
         var key = await _store.GetApiKeyAsync(id);
         if (key is null) return NotFound();
+        if (!User.HasCompanyAccess(key.CompanyId)) return Forbid();
         key.Revoked = true;
         key = await _store.UpdateApiKeyAsync(key);
 

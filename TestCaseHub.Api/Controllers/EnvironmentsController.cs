@@ -24,21 +24,26 @@ public class EnvironmentsController : ControllerBase
     private string ActorDisplayName => User.FindFirstValue("displayName") ?? "Unknown";
 
     [HttpGet]
-    public async Task<ActionResult<List<EnvironmentTargetResponse>>> GetAll()
+    public async Task<ActionResult<List<EnvironmentTargetResponse>>> GetAll([FromQuery] int? companyId = null)
     {
         if (!User.CanManageUsers()) return Forbid(); // Admin-only, matching Create below.
-        return (await _store.GetEnvironmentTargetsAsync()).Select(EnvironmentTargetResponse.From).ToList();
+        var effective = User.IsSuperAdmin() ? companyId : User.GetCompanyId();
+        if (effective is null) return User.IsSuperAdmin() ? BadRequest("SuperAdmin must specify ?companyId=.") : Forbid();
+        return (await _store.GetEnvironmentTargetsAsync()).Where(e => e.CompanyId == effective).Select(EnvironmentTargetResponse.From).ToList();
     }
 
     [HttpPost]
-    public async Task<ActionResult<EnvironmentTargetResponse>> Create(CreateEnvironmentTargetRequest req)
+    public async Task<ActionResult<EnvironmentTargetResponse>> Create(CreateEnvironmentTargetRequest req, [FromQuery] int? companyId = null)
     {
         if (!User.CanManageUsers()) return Forbid(); // Admin-only, same as secrets/user management
+        companyId = User.ResolveActingCompanyId(companyId);
+        if (companyId is null) return User.IsSuperAdmin() ? BadRequest("SuperAdmin must specify ?companyId=.") : Forbid();
         if (string.IsNullOrWhiteSpace(req.Name)) return BadRequest("Name is required.");
         if (!Models.EnvironmentType.All.Contains(req.EnvironmentType)) return BadRequest("EnvironmentType must be Staging or Production.");
 
         var env = new EnvironmentTarget
         {
+            CompanyId = companyId.Value,
             Name = req.Name.Trim(), Tenant = req.Tenant ?? "", EnvironmentType = req.EnvironmentType,
             DashboardBaseUrl = req.DashboardBaseUrl ?? "", AppApiBaseUrl = req.AppApiBaseUrl ?? "", AppBaseUrl = req.AppBaseUrl ?? "",
             RequiresTestDataCleanup = req.RequiresTestDataCleanup, CreatedBy = ActorDisplayName

@@ -16,16 +16,18 @@ public static class Permissions
         [Roles.Contributor] = 1,
         [Roles.Lead] = 2,
         [Roles.Admin] = 3,
+        [Roles.SuperAdmin] = 4,
     };
 
     public static string GetRole(this ClaimsPrincipal user) =>
         user.FindFirstValue("role") is { Length: > 0 } r && Roles.IsValid(r) ? r : Roles.Viewer;
 
-    // "At least" check along the Viewer < Contributor < Lead < Admin hierarchy.
+    // "At least" check along the Viewer < Contributor < Lead < Admin < SuperAdmin hierarchy.
     public static bool IsAtLeast(this ClaimsPrincipal user, string minRole) =>
         RoleRank.TryGetValue(user.GetRole(), out var have) && RoleRank.TryGetValue(minRole, out var need) && have >= need;
 
     public static bool IsAdmin(this ClaimsPrincipal user) => user.GetRole() == Roles.Admin;
+    public static bool IsSuperAdmin(this ClaimsPrincipal user) => user.GetRole() == Roles.SuperAdmin;
 
     // --- Feature-level checks (name the decision, not the role, so the role that satisfies it
     // can change later in one place without hunting through every call site) ---
@@ -45,15 +47,74 @@ public static class Permissions
     // else here — Viewer can still view/resolve suites, just not create them.
     public static bool CanManageSuites(this ClaimsPrincipal user) => user.IsAtLeast(Roles.Contributor);
 
-    // Agreed: only Lead/Admin can set or clear automationReady — this is the role half of the
-    // flag-integrity control; the evidence-backed half (script ref / automation config must
-    // actually exist) lands in Phase 6.
+    // Agreed: only Lead/Admin/SuperAdmin can set or clear automationReady — this is the role
+    // half of the flag-integrity control; the evidence-backed half (script ref / automation
+    // config must actually exist) lands in Phase 6.
     public static bool CanManageAutomationReady(this ClaimsPrincipal user) => user.IsAtLeast(Roles.Lead);
 
-    // Agreed: only Admin manages other users' roles/scope, invites, deactivation.
-    public static bool CanManageUsers(this ClaimsPrincipal user) => user.IsAdmin();
+    // Agreed: Admin (and SuperAdmin) manage other users' roles/scope, invites, deactivation —
+    // ALWAYS scoped to the acting Admin's own company (see HasCompanyAccess below); a bare
+    // Admin can never reach across into another company's users this way.
+    public static bool CanManageUsers(this ClaimsPrincipal user) => user.IsAtLeast(Roles.Admin);
 
-    // --- Layer/Module scope (orthogonal to role) ---
+    // Only SuperAdmin creates companies / issues a company's first-admin referral code.
+    public static bool CanManageCompanies(this ClaimsPrincipal user) => user.IsSuperAdmin();
+
+    // Admin (within their own company) and SuperAdmin (anywhere) manage Team membership and
+    // Team<->Module assignment.
+    public static bool CanManageTeams(this ClaimsPrincipal user) => user.IsAtLeast(Roles.Admin);
+
+    // --- Company scope (Phase 8) ---
+    // Every role except SuperAdmin carries exactly one CompanyId; SuperAdmin carries none
+    // (represented as null) because they're not confined to one company at all.
+    public static int? GetCompanyId(this ClaimsPrincipal user)
+    {
+        var raw = user.FindFirstValue("companyId");
+        return int.TryParse(raw, out var v) ? v : null;
+    }
+
+    // Resolves "which company is this action happening in", for actions that WRITE a new
+    // record (create module/team/suite/release/...). Non-SuperAdmin always act in their own
+    // company (queryCompanyId is ignored -- they can't use it to write into someone else's
+    // company just by passing a different id). SuperAdmin has no company of their own, so they
+    // MUST pass queryCompanyId to "enter" a company and act as if they were its Admin -- this
+    // is what lets a SuperAdmin do literally everything a real Admin could do inside any
+    // company, not just create companies/referral codes.
+    public static int? ResolveActingCompanyId(this ClaimsPrincipal user, int? queryCompanyId) =>
+        user.IsSuperAdmin() ? queryCompanyId : user.GetCompanyId();
+
+    // True if this user is allowed to touch a record belonging to targetCompanyId.
+    // SuperAdmin: always true (spans every company, viewed one company at a time by their own
+    // choice in the UI/API call, not by a database-level restriction).
+    // Everyone else: true only if it's literally their own company.
+    public static bool HasCompanyAccess(this ClaimsPrincipal user, int targetCompanyId) =>
+        user.IsSuperAdmin() || user.GetCompanyId() == targetCompanyId;
+
+    // --- Team scope (Phase 8) ---
+    // Comma-separated Team ids embedded in the JWT at login (Team membership doesn't change
+    // often enough to justify a per-request DB round trip just to compute this).
+    public static List<int> GetTeamIds(this ClaimsPrincipal user)
+    {
+        var raw = user.FindFirstValue("teamIds") ?? "";
+        return raw.Length == 0 ? new() : raw.Split(',', StringSplitOptions.RemoveEmptyEntries)
+            .Select(s => int.TryParse(s, out var v) ? v : -1).Where(v => v >= 0).ToList();
+    }
+
+    // Admin and SuperAdmin bypass team-based module restriction entirely (Admin sees every
+    // module in their own company; SuperAdmin sees every module in every company). Lead /
+    // Contributor / Viewer are restricted to modules assigned to at least one team they're a
+    // member of — moduleTeamIds is the set of Team ids assigned to the module in question; a
+    // module assigned to NO team yet is visible to nobody below Admin (matches "not yet
+    // organized into a team" rather than silently defaulting to open access).
+    public static bool HasModuleAccessViaTeam(this ClaimsPrincipal user, List<int> moduleTeamIds)
+    {
+        if (user.IsAtLeast(Roles.Admin)) return true;
+        var myTeams = user.GetTeamIds();
+        return moduleTeamIds.Any(t => myTeams.Contains(t));
+    }
+
+    // --- Layer/Module scope (legacy, orthogonal to role — never enforced anywhere; superseded
+    // by Team-based module access above, kept only so old User rows keep deserializing) ---
 
     public static List<string> GetLayerScope(this ClaimsPrincipal user)
     {
@@ -68,7 +129,6 @@ public static class Permissions
             .Select(s => int.TryParse(s, out var v) ? v : -1).Where(v => v >= 0).ToList();
     }
 
-    // Empty scope list = unrestricted (all layers / all modules) — see the comment on User.
     public static bool HasLayerAccess(this ClaimsPrincipal user, string layer)
     {
         var scope = user.GetLayerScope();

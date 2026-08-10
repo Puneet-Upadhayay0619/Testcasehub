@@ -4,6 +4,96 @@ using System.Text.Json.Serialization;
 
 namespace TestCaseHub.Api.Models;
 
+// Phase 8 (multi-company): one deployment now serves multiple companies out of the SAME
+// database, isolated by CompanyId rather than by separate deployments. SuperAdmin creates
+// these; everything else (Users, Modules, ...) hangs off a CompanyId. Nullable-on-User only
+// (SuperAdmin has no company -- they span all of them); everywhere else CompanyId is required.
+public class Company
+{
+    public int Id { get; set; }
+    [Required, MaxLength(256)]
+    public string Name { get; set; } = "";
+    [MaxLength(32)]
+    public string Status { get; set; } = "Active"; // "Active" or "Suspended"
+    [MaxLength(256)]
+    public string CreatedBy { get; set; } = ""; // SuperAdmin's email
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+}
+
+// A company-scoped referral code a SuperAdmin issues so a company's FIRST user can self-register
+// as that company's Admin -- deliberately separate from InviteLink (Admin.cs), which is how an
+// existing company's Admin invites MORE users into an already-provisioned company. Same
+// single-use-friendly shape (MaxUses/UsedCount/ExpiresAt/Revoked) as InviteLink, on purpose.
+public class CompanyAdminInvite
+{
+    public int Id { get; set; }
+    public int CompanyId { get; set; }
+    [ForeignKey(nameof(CompanyId))]
+    [JsonIgnore]
+    public Company? Company { get; set; }
+
+    [Required, MaxLength(64)]
+    public string Code { get; set; } = "";
+    public int MaxUses { get; set; } = 1;
+    public int UsedCount { get; set; } = 0;
+    public DateTime ExpiresAt { get; set; } = DateTime.UtcNow.AddDays(14);
+    public bool Revoked { get; set; } = false;
+    [MaxLength(256)]
+    public string CreatedByEmail { get; set; } = ""; // SuperAdmin's email
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+
+    [JsonIgnore]
+    public bool IsUsable => !Revoked && UsedCount < MaxUses && DateTime.UtcNow < ExpiresAt;
+}
+
+// A team within a company. A user can belong to multiple teams (TeamMember); a team can be
+// assigned multiple modules and a module can be assigned to multiple teams (TeamModule) -- this
+// is what makes "two teams sharing one module" a supported case rather than a conflict: a
+// user's effective module access is the UNION of every team they're in.
+public class Team
+{
+    public int Id { get; set; }
+    public int CompanyId { get; set; }
+    [ForeignKey(nameof(CompanyId))]
+    [JsonIgnore]
+    public Company? Company { get; set; }
+
+    [Required, MaxLength(128)]
+    public string Name { get; set; } = "";
+    public string Description { get; set; } = "";
+    [MaxLength(256)]
+    public string CreatedBy { get; set; } = "";
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+}
+
+public class TeamMember
+{
+    public int Id { get; set; }
+    public int TeamId { get; set; }
+    [ForeignKey(nameof(TeamId))]
+    [JsonIgnore]
+    public Team? Team { get; set; }
+    public int UserId { get; set; }
+    [ForeignKey(nameof(UserId))]
+    [JsonIgnore]
+    public User? User { get; set; }
+    public DateTime AddedAt { get; set; } = DateTime.UtcNow;
+}
+
+public class TeamModule
+{
+    public int Id { get; set; }
+    public int TeamId { get; set; }
+    [ForeignKey(nameof(TeamId))]
+    [JsonIgnore]
+    public Team? Team { get; set; }
+    public int ModuleId { get; set; }
+    [ForeignKey(nameof(ModuleId))]
+    [JsonIgnore]
+    public Module? Module { get; set; }
+    public DateTime AssignedAt { get; set; } = DateTime.UtcNow;
+}
+
 public class User
 {
     public int Id { get; set; }
@@ -15,17 +105,25 @@ public class User
     public string DisplayName { get; set; } = "";
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
-    // RBAC (Phase 1). Role is one of Roles.All. IsActive=false means "deactivated" — login is
-    // blocked but every historical CreatedBy/UpdatedBy/History record naming this user is left
-    // untouched (per the explicit decision: deactivate = login-block only, nothing else).
+    // Phase 8: which company this user belongs to. Null ONLY for SuperAdmin -- every other
+    // role must have a company. Existing users (pre-multi-company) are backfilled to a
+    // "Default Company" created at startup so nothing they had access to disappears.
+    public int? CompanyId { get; set; }
+    [ForeignKey(nameof(CompanyId))]
+    [JsonIgnore]
+    public Company? Company { get; set; }
+
+    // RBAC (Phase 1, extended Phase 8 with SuperAdmin). Role is one of Roles.All. IsActive=false
+    // means "deactivated" -- login is blocked but every historical CreatedBy/UpdatedBy/History
+    // record naming this user is left untouched (per the explicit decision: deactivate =
+    // login-block only, nothing else).
     [MaxLength(32)]
     public string Role { get; set; } = Models.Roles.Viewer;
     public bool IsActive { get; set; } = true;
 
-    // Layer/Module scope: which Dashboard/App-API/App layers and which specific Modules this
-    // user is allowed to touch, ON TOP OF whatever their Role already permits. An EMPTY list
-    // means "unrestricted" (all layers / all modules) — so existing users created before this
-    // field existed keep working exactly as before with no scope narrowing.
+    // Layer/Module scope: legacy per-user override, superseded by Team-based module access
+    // (Phase 8) but left in place (never enforced in any controller, so nothing breaks by
+    // leaving it inert) rather than ripped out, since existing rows already carry "[]" values.
     public string LayerScopeJson { get; set; } = "[]";
     public string ModuleScopeJson { get; set; } = "[]";
 
@@ -47,6 +145,14 @@ public class User
 public class Module
 {
     public int Id { get; set; }
+
+    // Phase 8: every module belongs to exactly one company. Module.Code's uniqueness check
+    // (IDataStore.ModuleCodeExistsAsync) is now scoped per-company, not global.
+    public int CompanyId { get; set; }
+    [ForeignKey(nameof(CompanyId))]
+    [JsonIgnore]
+    public Company? Company { get; set; }
+
     [Required, MaxLength(32)]
     public string Code { get; set; } = "";
     [Required, MaxLength(256)]
@@ -96,6 +202,15 @@ public class TestCase
     [ForeignKey(nameof(ModuleId))]
     [JsonIgnore]
     public Module? Module { get; set; }
+
+    // Phase 8: which Team authored/owns this case. Nullable -- old rows (pre-Team) and cases
+    // created by a user who belongs to exactly one team (no choice to make) may leave this
+    // unset. Company is NOT duplicated here on purpose -- it's derived from ModuleId->Module,
+    // so a test case can never disagree with its own module about which company it belongs to.
+    public int? TeamId { get; set; }
+    [ForeignKey(nameof(TeamId))]
+    [JsonIgnore]
+    public Team? Team { get; set; }
 
     [Required, MaxLength(32)]
     public string Layer { get; set; } = "";

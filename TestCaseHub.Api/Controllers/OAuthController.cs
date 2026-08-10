@@ -154,7 +154,8 @@ public class OAuthController : ControllerBase
             if (result is null)
                 return BadRequest(new { error = "invalid_grant", error_description = "Refresh token is invalid, expired, or already used." });
             var (rUser, rNewRefresh) = result.Value;
-            return Ok(new { access_token = _jwt.GenerateToken(rUser), token_type = "Bearer", expires_in = 3600, refresh_token = rNewRefresh });
+            var rTeamIds = await _store.GetTeamIdsForUserAsync(rUser.Id);
+            return Ok(new { access_token = _jwt.GenerateToken(rUser, rTeamIds), token_type = "Bearer", expires_in = 3600, refresh_token = rNewRefresh });
         }
 
         if (req.grant_type != "authorization_code")
@@ -176,7 +177,8 @@ public class OAuthController : ControllerBase
         var user = await _store.GetUserByIdAsync(authCode.UserId);
         if (user is null) return BadRequest(new { error = "invalid_grant", error_description = "User no longer exists." });
 
-        var accessToken = _jwt.GenerateToken(user);
+        var teamIds = await _store.GetTeamIdsForUserAsync(user.Id);
+        var accessToken = _jwt.GenerateToken(user, teamIds);
         var refreshToken = await _refresh.IssueAsync(user.Id, authCode.ClientId);
         return Ok(new { access_token = accessToken, token_type = "Bearer", expires_in = 3600, refresh_token = refreshToken });
     }

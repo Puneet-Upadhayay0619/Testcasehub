@@ -19,6 +19,9 @@ public static class ReleaseStatus
 public class Release
 {
     public int Id { get; set; }
+
+    // Phase 8: company isolation -- a release lives in exactly one company.
+    public int CompanyId { get; set; }
     [Required, MaxLength(128)]
     public string Name { get; set; } = "";
     [MaxLength(32)]
@@ -40,6 +43,10 @@ public class Release
 public class TestRun
 {
     public int Id { get; set; }
+
+    // Phase 8: company isolation -- TestRun can be ad-hoc (no ReleaseId/SuiteId), so it needs
+    // its own CompanyId rather than deriving one from a parent that might not exist.
+    public int CompanyId { get; set; }
     public int? ReleaseId { get; set; }
     public int? SuiteId { get; set; }
     [Required, MaxLength(128)]

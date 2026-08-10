@@ -17,8 +17,9 @@ public interface IDataStore
 
     Task<List<Module>> GetModulesAsync();
     Task<Module?> GetModuleAsync(int id);
-    Task<bool> ModuleCodeExistsAsync(string code);
+    Task<bool> ModuleCodeExistsAsync(int companyId, string code);
     Task<Module> CreateModuleAsync(Module module);
+    Task<Module> UpdateModuleAsync(Module module); // narrow use: Phase 8 company backfill only -- modules have no general edit UI
     Task<Dictionary<int, int>> GetTestCaseCountsByModuleAsync();
 
     Task<TaskLink> CreateTaskLinkAsync(TaskLink link);
@@ -80,6 +81,7 @@ public interface IDataStore
     Task<List<TestRun>> GetTestRunsAsync(int? releaseId);
     Task<TestRun?> GetTestRunAsync(int id);
     Task<TestRun> CreateTestRunAsync(TestRun run);
+    Task<TestRun> UpdateTestRunAsync(TestRun run); // narrow use: Phase 8 company backfill only
 
     Task<List<TestRunResult>> GetTestRunResultsAsync(int testRunId);
     Task<TestRunResult?> GetTestRunResultByAttemptKeyAsync(string attemptKey);
@@ -105,4 +107,30 @@ public interface IDataStore
     Task<EnvironmentTarget?> GetEnvironmentTargetAsync(int id);
     Task<EnvironmentTarget> CreateEnvironmentTargetAsync(EnvironmentTarget env);
     Task<EnvironmentTarget> UpdateEnvironmentTargetAsync(EnvironmentTarget env);
+
+    // ---- Phase 8: multi-company, teams ----
+    Task<Company> CreateCompanyAsync(Company company);
+    Task<List<Company>> GetCompaniesAsync();
+    Task<Company?> GetCompanyAsync(int id);
+    Task<Company> UpdateCompanyAsync(Company company);
+
+    Task<CompanyAdminInvite> CreateCompanyAdminInviteAsync(CompanyAdminInvite invite);
+    Task<CompanyAdminInvite?> GetCompanyAdminInviteByCodeAsync(string code);
+    Task<List<CompanyAdminInvite>> GetCompanyAdminInvitesAsync(int? companyId);
+    Task<CompanyAdminInvite> UpdateCompanyAdminInviteAsync(CompanyAdminInvite invite);
+
+    Task<Team> CreateTeamAsync(Team team);
+    Task<List<Team>> GetTeamsAsync(int companyId);
+    Task<Team?> GetTeamAsync(int id);
+    Task<Team> UpdateTeamAsync(Team team);
+
+    Task AddTeamMemberAsync(int teamId, int userId);
+    Task RemoveTeamMemberAsync(int teamId, int userId);
+    Task<List<User>> GetTeamMembersAsync(int teamId);
+    Task<List<int>> GetTeamIdsForUserAsync(int userId);
+
+    Task AddTeamModuleAsync(int teamId, int moduleId);
+    Task RemoveTeamModuleAsync(int teamId, int moduleId);
+    Task<List<int>> GetModuleIdsForTeamAsync(int teamId);
+    Task<List<int>> GetTeamIdsForModuleAsync(int moduleId);
 }

@@ -27,6 +27,13 @@ public class AppDbContext : DbContext
     public DbSet<ApiKey> ApiKeys => Set<ApiKey>();
     public DbSet<EnvironmentTarget> EnvironmentTargets => Set<EnvironmentTarget>();
 
+    // Phase 8: multi-company, teams.
+    public DbSet<Company> Companies => Set<Company>();
+    public DbSet<CompanyAdminInvite> CompanyAdminInvites => Set<CompanyAdminInvite>();
+    public DbSet<Team> Teams => Set<Team>();
+    public DbSet<TeamMember> TeamMembers => Set<TeamMember>();
+    public DbSet<TeamModule> TeamModules => Set<TeamModule>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<User>().HasIndex(u => u.Email).IsUnique();
@@ -36,10 +43,13 @@ public class AppDbContext : DbContext
         // mis-role every EXISTING user the moment this migration runs against real data.
         modelBuilder.Entity<User>().Property(u => u.IsActive).HasDefaultValue(true);
         modelBuilder.Entity<User>().Property(u => u.Role).HasDefaultValue(Models.Roles.Viewer);
-        modelBuilder.Entity<Module>().HasIndex(m => m.Code).IsUnique();
+        // Phase 8: Module.Code used to be globally unique; now it only needs to be unique
+        // WITHIN a company (two different companies are free to both have a "CHK" module).
+        modelBuilder.Entity<Module>().HasIndex(m => new { m.CompanyId, m.Code }).IsUnique();
         modelBuilder.Entity<PriorityOption>().HasIndex(p => p.Value).IsUnique();
         modelBuilder.Entity<StatusOption>().HasIndex(s => s.Value).IsUnique();
         modelBuilder.Entity<InviteLink>().HasIndex(i => i.Code).IsUnique();
+        modelBuilder.Entity<CompanyAdminInvite>().HasIndex(i => i.Code).IsUnique();
         modelBuilder.Entity<RefreshToken>().HasIndex(r => r.TokenHash).IsUnique();
         // Filtered so only NON-NULL RunAttemptKey values must be unique — SQL Server's default
         // unique-index behaviour otherwise only tolerates a single NULL total, which would
@@ -65,6 +75,20 @@ public class AppDbContext : DbContext
             .WithOne(t => t.Module)
             .HasForeignKey(t => t.ModuleId)
             .OnDelete(DeleteBehavior.Restrict);
+
+        // Phase 8: Team<->User and Team<->Module are plain many-to-many join rows (not EF's
+        // implicit skip-navigation many-to-many) so each membership/assignment carries its own
+        // Id + timestamp — simpler to query/report on than a shadow join table would be.
+        modelBuilder.Entity<TeamMember>().HasIndex(tm => new { tm.TeamId, tm.UserId }).IsUnique();
+        modelBuilder.Entity<TeamModule>().HasIndex(tm => new { tm.TeamId, tm.ModuleId }).IsUnique();
+        modelBuilder.Entity<TeamMember>()
+            .HasOne(tm => tm.Team).WithMany().HasForeignKey(tm => tm.TeamId).OnDelete(DeleteBehavior.Cascade);
+        modelBuilder.Entity<TeamMember>()
+            .HasOne(tm => tm.User).WithMany().HasForeignKey(tm => tm.UserId).OnDelete(DeleteBehavior.Cascade);
+        modelBuilder.Entity<TeamModule>()
+            .HasOne(tm => tm.Team).WithMany().HasForeignKey(tm => tm.TeamId).OnDelete(DeleteBehavior.Cascade);
+        modelBuilder.Entity<TeamModule>()
+            .HasOne(tm => tm.Module).WithMany().HasForeignKey(tm => tm.ModuleId).OnDelete(DeleteBehavior.Cascade);
 
         // Seed the base Priority/Status values (mirrors PRIORITIES/STATUSES constants in the artifact).
         modelBuilder.Entity<PriorityOption>().HasData(

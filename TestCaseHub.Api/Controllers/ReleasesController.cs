@@ -32,22 +32,30 @@ public class ReleasesController : ControllerBase
     };
 
     [HttpGet]
-    public async Task<ActionResult<List<ReleaseResponse>>> GetAll() =>
-        (await _store.GetReleasesAsync()).Select(ReleaseResponse.From).ToList();
+    public async Task<ActionResult<List<ReleaseResponse>>> GetAll([FromQuery] int? companyId = null)
+    {
+        var effective = User.IsSuperAdmin() ? companyId : User.GetCompanyId();
+        if (effective is null) return User.IsSuperAdmin() ? BadRequest("SuperAdmin must specify ?companyId=.") : Forbid();
+        return (await _store.GetReleasesAsync()).Where(r => r.CompanyId == effective).Select(ReleaseResponse.From).ToList();
+    }
 
     [HttpGet("{id:int}")]
     public async Task<ActionResult<ReleaseResponse>> GetOne(int id)
     {
         var r = await _store.GetReleaseAsync(id);
-        return r is null ? NotFound() : ReleaseResponse.From(r);
+        if (r is null) return NotFound();
+        if (!User.HasCompanyAccess(r.CompanyId)) return Forbid();
+        return ReleaseResponse.From(r);
     }
 
     [HttpPost]
-    public async Task<ActionResult<ReleaseResponse>> Create(CreateReleaseRequest req)
+    public async Task<ActionResult<ReleaseResponse>> Create(CreateReleaseRequest req, [FromQuery] int? companyId = null)
     {
         if (!User.IsAtLeast(Roles.Contributor)) return Forbid();
+        companyId = User.ResolveActingCompanyId(companyId);
+        if (companyId is null) return User.IsSuperAdmin() ? BadRequest("SuperAdmin must specify ?companyId=.") : Forbid();
         if (string.IsNullOrWhiteSpace(req.Name)) return BadRequest("Release name is required.");
-        var release = new Release { Name = req.Name.Trim(), Version = req.Version ?? "", CreatedBy = ActorDisplayName };
+        var release = new Release { CompanyId = companyId.Value, Name = req.Name.Trim(), Version = req.Version ?? "", CreatedBy = ActorDisplayName };
         release = await _store.CreateReleaseAsync(release);
         return ReleaseResponse.From(release);
     }
@@ -57,6 +65,7 @@ public class ReleasesController : ControllerBase
     {
         var release = await _store.GetReleaseAsync(id);
         if (release is null) return NotFound();
+        if (!User.HasCompanyAccess(release.CompanyId)) return Forbid();
         if (!ReleaseStatus.All.Contains(req.NewStatus)) return BadRequest("Unknown status.");
 
         if (!AllowedTransitions.TryGetValue(release.Status, out var allowed) || !allowed.Contains(req.NewStatus))
@@ -93,6 +102,7 @@ public class ReleasesController : ControllerBase
     {
         var release = await _store.GetReleaseAsync(id);
         if (release is null) return NotFound();
+        if (!User.HasCompanyAccess(release.CompanyId)) return Forbid();
 
         var results = await _store.GetResultsForReleaseAsync(id);
         var rollup = RollupCalculator.Compute(results);

@@ -19,6 +19,17 @@ public class TestCasesController : ControllerBase
 
     private string CurrentUserDisplayName => User.FindFirstValue("displayName") ?? User.FindFirstValue(ClaimTypes.Email) ?? "Unknown";
 
+    // Phase 8: true if the caller may see/touch the given module -- same company (or
+    // SuperAdmin, any company), AND (for Lead/Contributor/Viewer) a member of a team the
+    // module is assigned to. Admin/SuperAdmin bypass the team half entirely.
+    private async Task<bool> CanAccessModuleAsync(Module module)
+    {
+        if (!User.HasCompanyAccess(module.CompanyId)) return false;
+        if (User.IsAtLeast(Roles.Admin)) return true;
+        var moduleTeamIds = await _store.GetTeamIdsForModuleAsync(module.Id);
+        return User.HasModuleAccessViaTeam(moduleTeamIds);
+    }
+
     private static readonly Dictionary<string, string> LayerCodes = new()
     {
         ["Dashboard"] = "DSH", ["App-API"] = "API", ["App"] = "APP"
@@ -57,7 +68,26 @@ public class TestCasesController : ControllerBase
         [FromQuery] int? moduleId, [FromQuery] string? layer, [FromQuery] string? verificationType,
         [FromQuery] string? status, [FromQuery] string? priority, [FromQuery] string? search)
     {
+        // Phase 8: a specific moduleId must be one the caller can access; with no moduleId,
+        // narrow to only the modules the caller can access (their company, team-filtered)
+        // rather than returning every test case in the whole database across every company.
+        if (moduleId.HasValue)
+        {
+            var m = await _store.GetModuleAsync(moduleId.Value);
+            if (m is null) return NotFound("Module not found.");
+            if (!await CanAccessModuleAsync(m)) return Forbid();
+        }
+
         var results = await _store.GetTestCasesAsync(new TestCaseFilter(moduleId, layer, verificationType, status, priority, search));
+
+        if (!moduleId.HasValue)
+        {
+            var allowedModuleIds = new HashSet<int>();
+            foreach (var m in await _store.GetModulesAsync())
+                if (await CanAccessModuleAsync(m)) allowedModuleIds.Add(m.Id);
+            results = results.Where(t => allowedModuleIds.Contains(t.ModuleId)).ToList();
+        }
+
         return results.Select(TestCaseResponse.From).ToList();
     }
 
@@ -66,6 +96,8 @@ public class TestCasesController : ControllerBase
     {
         var tc = await _store.GetTestCaseAsync(id);
         if (tc is null) return NotFound();
+        var module = await _store.GetModuleAsync(tc.ModuleId);
+        if (module is null || !await CanAccessModuleAsync(module)) return Forbid();
         return TestCaseResponse.From(tc);
     }
 
@@ -75,11 +107,25 @@ public class TestCasesController : ControllerBase
         if (!User.CanEditTestCases()) return Forbid();
 
         var module = await _store.GetModuleAsync(req.ModuleId);
+        if (module is not null && !await CanAccessModuleAsync(module)) return Forbid();
         var missing = TestCaseValidation.Validate(req, module is not null);
         if (missing.Count > 0) return BadRequest(new { missing });
 
         var gateError = ValidateAutomationGate(req);
         if (gateError is not null) return BadRequest(new { error = gateError });
+
+        // Phase 8: attribute the case to a team. If the caller specified one, it must be a
+        // team they're actually in that also has access to this module; otherwise fall back
+        // to "the one team they're in with access to this module", if unambiguous.
+        int? teamId = req.TeamId;
+        if (teamId.HasValue && !User.GetTeamIds().Contains(teamId.Value))
+            return BadRequest("You can only attribute a test case to a team you belong to.");
+        if (!teamId.HasValue)
+        {
+            var moduleTeams = await _store.GetTeamIdsForModuleAsync(req.ModuleId);
+            var myTeamsWithAccess = User.GetTeamIds().Where(moduleTeams.Contains).ToList();
+            if (myTeamsWithAccess.Count == 1) teamId = myTeamsWithAccess[0];
+        }
 
         var layerCode = LayerCodes.GetValueOrDefault(req.Layer, "??");
         var prefix = $"TC-{module!.Code}-{layerCode}-";
@@ -94,7 +140,8 @@ public class TestCasesController : ControllerBase
             Title = req.Title.Trim(), Preconditions = req.Preconditions ?? "",
             Priority = req.Priority, Type = req.Type, Status = req.Status,
             AutomationReady = req.AutomationReady, AutomationScriptRef = req.AutomationScriptRef ?? "",
-            CreatedBy = CurrentUserDisplayName, UpdatedBy = CurrentUserDisplayName, Version = 1
+            CreatedBy = CurrentUserDisplayName, UpdatedBy = CurrentUserDisplayName, Version = 1,
+            TeamId = teamId
         };
         tc.LinkedModuleIds = req.LinkedModuleIds ?? new();
         tc.Steps = attemptedSteps.Select((s, i) => new TestCaseStep { StepNo = i + 1, Action = s.Action, ExpectedResult = s.ExpectedResult }).ToList();
@@ -120,7 +167,11 @@ public class TestCasesController : ControllerBase
         var tc = await _store.GetTestCaseAsync(id);
         if (tc is null) return NotFound();
 
+        var existingModule = await _store.GetModuleAsync(tc.ModuleId);
+        if (existingModule is null || !await CanAccessModuleAsync(existingModule)) return Forbid();
+
         var module = await _store.GetModuleAsync(req.ModuleId);
+        if (module is not null && !await CanAccessModuleAsync(module)) return Forbid();
         var missing = TestCaseValidation.Validate(req, module is not null);
         if (missing.Count > 0) return BadRequest(new { missing });
 
@@ -138,6 +189,7 @@ public class TestCasesController : ControllerBase
         tc.Tags = req.Tags ?? new();
         tc.AutomationReady = req.AutomationReady; tc.AutomationScriptRef = req.AutomationScriptRef ?? "";
         tc.LinkedModuleIds = req.LinkedModuleIds ?? tc.LinkedModuleIds;
+        if (req.TeamId.HasValue) tc.TeamId = req.TeamId;
         if (req.AutomationConfig is not null) tc.AutomationConfigJson = SerializeAutomationConfig(req.AutomationConfig);
         if (req.SelectorStability is not null) tc.SelectorStability = req.SelectorStability;
         tc.UpdatedBy = CurrentUserDisplayName; tc.UpdatedAt = DateTime.UtcNow; tc.Version += 1;
@@ -159,6 +211,8 @@ public class TestCasesController : ControllerBase
 
         var tc = await _store.GetTestCaseAsync(id);
         if (tc is null) return NotFound();
+        var depModule = await _store.GetModuleAsync(tc.ModuleId);
+        if (depModule is null || !await CanAccessModuleAsync(depModule)) return Forbid();
 
         var oldSnapshot = JsonSerializer.Serialize(TestCaseResponse.From(tc));
         tc.Status = "Deprecated"; tc.UpdatedBy = CurrentUserDisplayName; tc.UpdatedAt = DateTime.UtcNow; tc.Version += 1;
@@ -176,6 +230,11 @@ public class TestCasesController : ControllerBase
     [HttpGet("{id}/history")]
     public async Task<ActionResult<List<HistoryResponse>>> GetHistory(string id)
     {
+        var tcForHistory = await _store.GetTestCaseAsync(id);
+        if (tcForHistory is null) return NotFound();
+        var histModule = await _store.GetModuleAsync(tcForHistory.ModuleId);
+        if (histModule is null || !await CanAccessModuleAsync(histModule)) return Forbid();
+
         var hist = await _store.GetHistoryAsync(id);
         return hist.Select(h => new HistoryResponse(h.Id, h.TestCaseId, h.ChangedBy, h.ChangedAt, h.ChangeType, h.OldSnapshotJson, h.NewSnapshotJson, h.Comment)).ToList();
     }
@@ -274,6 +333,11 @@ public class TestCasesController : ControllerBase
     [HttpGet("{id}/history/{historyId:int}/diff")]
     public async Task<ActionResult<List<HistoryDiffEntry>>> GetHistoryDiff(string id, int historyId)
     {
+        var tcForDiff = await _store.GetTestCaseAsync(id);
+        if (tcForDiff is null) return NotFound();
+        var diffModule = await _store.GetModuleAsync(tcForDiff.ModuleId);
+        if (diffModule is null || !await CanAccessModuleAsync(diffModule)) return Forbid();
+
         var hist = await _store.GetHistoryAsync(id);
         var entry = hist.FirstOrDefault(h => h.Id == historyId);
         if (entry is null) return NotFound();

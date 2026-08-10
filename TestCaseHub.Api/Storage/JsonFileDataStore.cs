@@ -32,6 +32,11 @@ public class JsonFileDataStore : IDataStore
         public List<Notification> Notifications { get; set; } = new();
         public List<ApiKey> ApiKeys { get; set; } = new();
         public List<EnvironmentTarget> EnvironmentTargets { get; set; } = new();
+        public List<Company> Companies { get; set; } = new();
+        public List<CompanyAdminInvite> CompanyAdminInvites { get; set; } = new();
+        public List<Team> Teams { get; set; } = new();
+        public List<TeamMember> TeamMembers { get; set; } = new();
+        public List<TeamModule> TeamModules { get; set; } = new();
         public int NextUserId { get; set; } = 1;
         public int NextAuditLogId { get; set; } = 1;
         public int NextInviteLinkId { get; set; } = 1;
@@ -45,6 +50,11 @@ public class JsonFileDataStore : IDataStore
         public int NextNotificationId { get; set; } = 1;
         public int NextApiKeyId { get; set; } = 1;
         public int NextEnvironmentTargetId { get; set; } = 1;
+        public int NextCompanyId { get; set; } = 1;
+        public int NextCompanyAdminInviteId { get; set; } = 1;
+        public int NextTeamId { get; set; } = 1;
+        public int NextTeamMemberId { get; set; } = 1;
+        public int NextTeamModuleId { get; set; } = 1;
         public int NextModuleId { get; set; } = 1;
         public int NextTaskLinkId { get; set; } = 1;
         public int NextHistoryId { get; set; } = 1;
@@ -168,14 +178,23 @@ public class JsonFileDataStore : IDataStore
     public Task<Module?> GetModuleAsync(int id) =>
         WithLockAsync(async () => _data.Modules.FirstOrDefault(m => m.Id == id));
 
-    public Task<bool> ModuleCodeExistsAsync(string code) =>
-        WithLockAsync(async () => _data.Modules.Any(m => m.Code == code));
+    public Task<bool> ModuleCodeExistsAsync(int companyId, string code) =>
+        WithLockAsync(async () => _data.Modules.Any(m => m.CompanyId == companyId && m.Code == code));
 
     public Task<Module> CreateModuleAsync(Module module) =>
         WithLockAsync(async () =>
         {
             module.Id = _data.NextModuleId++;
             _data.Modules.Add(module);
+            await PersistAsync();
+            return module;
+        });
+
+    public Task<Module> UpdateModuleAsync(Module module) =>
+        WithLockAsync(async () =>
+        {
+            var idx = _data.Modules.FindIndex(m => m.Id == module.Id);
+            if (idx >= 0) _data.Modules[idx] = module;
             await PersistAsync();
             return module;
         });
@@ -442,6 +461,15 @@ public class JsonFileDataStore : IDataStore
             return run;
         });
 
+    public Task<TestRun> UpdateTestRunAsync(TestRun run) =>
+        WithLockAsync(async () =>
+        {
+            var idx = _data.TestRuns.FindIndex(t => t.Id == run.Id);
+            if (idx >= 0) _data.TestRuns[idx] = run;
+            await PersistAsync();
+            return run;
+        });
+
     public Task<List<TestRunResult>> GetTestRunResultsAsync(int testRunId) =>
         WithLockAsync(async () => _data.TestRunResults.Where(r => r.TestRunId == testRunId).OrderBy(r => r.ExecutedAt).ToList());
 
@@ -552,4 +580,123 @@ public class JsonFileDataStore : IDataStore
             await PersistAsync();
             return env;
         });
+
+    // ---- Phase 8: multi-company, teams ----
+    public Task<Company> CreateCompanyAsync(Company company) =>
+        WithLockAsync(async () =>
+        {
+            company.Id = _data.NextCompanyId++;
+            _data.Companies.Add(company);
+            await PersistAsync();
+            return company;
+        });
+
+    public Task<List<Company>> GetCompaniesAsync() =>
+        WithLockAsync(async () => _data.Companies.OrderBy(c => c.Name).ToList());
+
+    public Task<Company?> GetCompanyAsync(int id) =>
+        WithLockAsync(async () => _data.Companies.FirstOrDefault(c => c.Id == id));
+
+    public Task<Company> UpdateCompanyAsync(Company company) =>
+        WithLockAsync(async () =>
+        {
+            var idx = _data.Companies.FindIndex(c => c.Id == company.Id);
+            if (idx >= 0) _data.Companies[idx] = company;
+            await PersistAsync();
+            return company;
+        });
+
+    public Task<CompanyAdminInvite> CreateCompanyAdminInviteAsync(CompanyAdminInvite invite) =>
+        WithLockAsync(async () =>
+        {
+            invite.Id = _data.NextCompanyAdminInviteId++;
+            _data.CompanyAdminInvites.Add(invite);
+            await PersistAsync();
+            return invite;
+        });
+
+    public Task<CompanyAdminInvite?> GetCompanyAdminInviteByCodeAsync(string code) =>
+        WithLockAsync(async () => _data.CompanyAdminInvites.FirstOrDefault(i => i.Code == code));
+
+    public Task<List<CompanyAdminInvite>> GetCompanyAdminInvitesAsync(int? companyId) =>
+        WithLockAsync(async () => _data.CompanyAdminInvites.Where(i => companyId == null || i.CompanyId == companyId).OrderByDescending(i => i.CreatedAt).ToList());
+
+    public Task<CompanyAdminInvite> UpdateCompanyAdminInviteAsync(CompanyAdminInvite invite) =>
+        WithLockAsync(async () =>
+        {
+            var idx = _data.CompanyAdminInvites.FindIndex(i => i.Id == invite.Id);
+            if (idx >= 0) _data.CompanyAdminInvites[idx] = invite;
+            await PersistAsync();
+            return invite;
+        });
+
+    public Task<Team> CreateTeamAsync(Team team) =>
+        WithLockAsync(async () =>
+        {
+            team.Id = _data.NextTeamId++;
+            _data.Teams.Add(team);
+            await PersistAsync();
+            return team;
+        });
+
+    public Task<List<Team>> GetTeamsAsync(int companyId) =>
+        WithLockAsync(async () => _data.Teams.Where(t => t.CompanyId == companyId).OrderBy(t => t.Name).ToList());
+
+    public Task<Team?> GetTeamAsync(int id) =>
+        WithLockAsync(async () => _data.Teams.FirstOrDefault(t => t.Id == id));
+
+    public Task<Team> UpdateTeamAsync(Team team) =>
+        WithLockAsync(async () =>
+        {
+            var idx = _data.Teams.FindIndex(t => t.Id == team.Id);
+            if (idx >= 0) _data.Teams[idx] = team;
+            await PersistAsync();
+            return team;
+        });
+
+    public Task AddTeamMemberAsync(int teamId, int userId) =>
+        WithLockAsync(async () =>
+        {
+            if (_data.TeamMembers.Any(tm => tm.TeamId == teamId && tm.UserId == userId)) return;
+            _data.TeamMembers.Add(new TeamMember { Id = _data.NextTeamMemberId++, TeamId = teamId, UserId = userId });
+            await PersistAsync();
+        });
+
+    public Task RemoveTeamMemberAsync(int teamId, int userId) =>
+        WithLockAsync(async () =>
+        {
+            _data.TeamMembers.RemoveAll(tm => tm.TeamId == teamId && tm.UserId == userId);
+            await PersistAsync();
+        });
+
+    public Task<List<User>> GetTeamMembersAsync(int teamId) =>
+        WithLockAsync(async () =>
+        {
+            var userIds = _data.TeamMembers.Where(tm => tm.TeamId == teamId).Select(tm => tm.UserId).ToHashSet();
+            return _data.Users.Where(u => userIds.Contains(u.Id)).ToList();
+        });
+
+    public Task<List<int>> GetTeamIdsForUserAsync(int userId) =>
+        WithLockAsync(async () => _data.TeamMembers.Where(tm => tm.UserId == userId).Select(tm => tm.TeamId).ToList());
+
+    public Task AddTeamModuleAsync(int teamId, int moduleId) =>
+        WithLockAsync(async () =>
+        {
+            if (_data.TeamModules.Any(tm => tm.TeamId == teamId && tm.ModuleId == moduleId)) return;
+            _data.TeamModules.Add(new TeamModule { Id = _data.NextTeamModuleId++, TeamId = teamId, ModuleId = moduleId });
+            await PersistAsync();
+        });
+
+    public Task RemoveTeamModuleAsync(int teamId, int moduleId) =>
+        WithLockAsync(async () =>
+        {
+            _data.TeamModules.RemoveAll(tm => tm.TeamId == teamId && tm.ModuleId == moduleId);
+            await PersistAsync();
+        });
+
+    public Task<List<int>> GetModuleIdsForTeamAsync(int teamId) =>
+        WithLockAsync(async () => _data.TeamModules.Where(tm => tm.TeamId == teamId).Select(tm => tm.ModuleId).ToList());
+
+    public Task<List<int>> GetTeamIdsForModuleAsync(int moduleId) =>
+        WithLockAsync(async () => _data.TeamModules.Where(tm => tm.ModuleId == moduleId).Select(tm => tm.TeamId).ToList());
 }

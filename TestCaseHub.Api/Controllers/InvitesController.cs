@@ -31,23 +31,27 @@ public class InvitesController : ControllerBase
     }
 
     [HttpGet]
-    public async Task<ActionResult<List<InviteLinkResponse>>> GetAll()
+    public async Task<ActionResult<List<InviteLinkResponse>>> GetAll([FromQuery] int? companyId = null)
     {
         if (!User.CanManageUsers()) return Forbid();
+        var effective = User.IsSuperAdmin() ? companyId : User.GetCompanyId();
+        if (effective is null) return User.IsSuperAdmin() ? BadRequest("SuperAdmin must specify ?companyId=.") : Forbid();
         var invites = await _store.GetInviteLinksAsync();
-        return invites.Select(InviteLinkResponse.From).ToList();
+        return invites.Where(i => i.CompanyId == effective).Select(InviteLinkResponse.From).ToList();
     }
 
     [HttpPost]
-    public async Task<ActionResult<InviteLinkResponse>> Create(CreateInviteRequest req)
+    public async Task<ActionResult<InviteLinkResponse>> Create(CreateInviteRequest req, [FromQuery] int? companyId = null)
     {
         if (!User.CanManageUsers()) return Forbid();
+        companyId = User.ResolveActingCompanyId(companyId);
+        if (companyId is null) return User.IsSuperAdmin() ? BadRequest("SuperAdmin must specify ?companyId=.") : Forbid();
         var maxUses = req.MaxUses <= 0 ? 1 : req.MaxUses;
         var expiresInDays = req.ExpiresInDays <= 0 ? 7 : req.ExpiresInDays;
 
         var invite = new InviteLink
         {
-            Code = GenerateCode(), MaxUses = maxUses,
+            CompanyId = companyId.Value, Code = GenerateCode(), MaxUses = maxUses,
             ExpiresAt = DateTime.UtcNow.AddDays(expiresInDays),
             CreatedByEmail = ActorEmail
         };
@@ -69,6 +73,7 @@ public class InvitesController : ControllerBase
         var invites = await _store.GetInviteLinksAsync();
         var invite = invites.FirstOrDefault(i => i.Id == id);
         if (invite is null) return NotFound();
+        if (!User.HasCompanyAccess(invite.CompanyId)) return Forbid();
 
         invite.Revoked = true;
         invite = await _store.UpdateInviteLinkAsync(invite);

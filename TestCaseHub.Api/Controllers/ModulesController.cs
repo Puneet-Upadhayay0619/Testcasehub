@@ -15,10 +15,41 @@ public class ModulesController : ControllerBase
     private readonly IDataStore _store;
     public ModulesController(IDataStore store) => _store = store;
 
+    // Phase 8: SuperAdmin has no company of their own, so they must say which company's
+    // modules they want to look at (companyId query param) — "company-wise, never mixed", per
+    // the agreed design. Everyone else ignores this param entirely and always sees only their
+    // own company; they can't use it to peek into another company's data even if they pass one.
     [HttpGet]
-    public async Task<ActionResult<List<ModuleResponse>>> GetAll()
+    public async Task<ActionResult<List<ModuleResponse>>> GetAll(int? companyId = null)
     {
-        var modules = await _store.GetModulesAsync();
+        int effectiveCompanyId;
+        if (User.IsSuperAdmin())
+        {
+            if (companyId is null) return BadRequest("SuperAdmin must specify ?companyId= to view a company's modules.");
+            effectiveCompanyId = companyId.Value;
+        }
+        else
+        {
+            var myCompany = User.GetCompanyId();
+            if (myCompany is null) return Forbid();
+            effectiveCompanyId = myCompany.Value;
+        }
+
+        var modules = (await _store.GetModulesAsync()).Where(m => m.CompanyId == effectiveCompanyId).ToList();
+
+        // Team-based module visibility (Phase 8): Admin/SuperAdmin see every module in the
+        // company; Lead/Contributor/Viewer only see modules assigned to a team they're in.
+        if (!User.IsAtLeast(Roles.Admin))
+        {
+            var visible = new List<Module>();
+            foreach (var m in modules)
+            {
+                var moduleTeamIds = await _store.GetTeamIdsForModuleAsync(m.Id);
+                if (User.HasModuleAccessViaTeam(moduleTeamIds)) visible.Add(m);
+            }
+            modules = visible;
+        }
+
         var counts = await _store.GetTestCaseCountsByModuleAsync();
         return modules.Select(m => new ModuleResponse(
             m.Id, m.Name, m.Code, m.Description, m.Owner, m.Status, m.CreatedAt,
@@ -27,21 +58,27 @@ public class ModulesController : ControllerBase
     }
 
     [HttpPost]
-    public async Task<ActionResult<ModuleResponse>> Create(ModuleCreateRequest req)
+    public async Task<ActionResult<ModuleResponse>> Create(ModuleCreateRequest req, [FromQuery] int? companyId = null)
     {
         // Agreed in planning: module creation is Contributor and above (Viewer cannot).
         if (!User.CanCreateModule())
             return Forbid();
 
+        var resolvedCompanyId = User.ResolveActingCompanyId(companyId);
+        if (resolvedCompanyId is null)
+            return User.IsSuperAdmin() ? BadRequest("SuperAdmin must specify ?companyId= to create a module inside a company.") : Forbid();
+        companyId = resolvedCompanyId;
+
         if (string.IsNullOrWhiteSpace(req.Name) || string.IsNullOrWhiteSpace(req.Code))
             return BadRequest("Module name and code are required.");
 
         var code = req.Code.Trim().ToUpperInvariant();
-        if (await _store.ModuleCodeExistsAsync(code))
+        if (await _store.ModuleCodeExistsAsync(companyId.Value, code))
             return Conflict($"A module with code '{code}' already exists.");
 
         var module = new Module
         {
+            CompanyId = companyId.Value,
             Name = req.Name.Trim(), Code = code, Description = req.Description ?? "",
             Owner = req.Owner ?? "", Status = string.IsNullOrWhiteSpace(req.Status) ? "Active" : req.Status
         };
@@ -56,6 +93,7 @@ public class ModulesController : ControllerBase
 
         var module = await _store.GetModuleAsync(moduleId);
         if (module is null) return NotFound("Module not found.");
+        if (!User.HasCompanyAccess(module.CompanyId)) return Forbid();
         if (string.IsNullOrWhiteSpace(req.AdoTaskId)) return BadRequest("Task ID is required.");
 
         var link = new TaskLink
@@ -70,6 +108,10 @@ public class ModulesController : ControllerBase
     [HttpGet("{moduleId:int}/task-links")]
     public async Task<ActionResult<List<TaskLinkResponse>>> GetTaskLinks(int moduleId)
     {
+        var module = await _store.GetModuleAsync(moduleId);
+        if (module is null) return NotFound("Module not found.");
+        if (!User.HasCompanyAccess(module.CompanyId)) return Forbid();
+
         var links = await _store.GetTaskLinksAsync(moduleId);
         return links.Select(l => new TaskLinkResponse(l.Id, l.ModuleId, l.Layer, l.AdoProject, l.AdoTaskId, l.AdoTaskTitle, l.AdoTaskUrl, l.LinkedAt)).ToList();
     }

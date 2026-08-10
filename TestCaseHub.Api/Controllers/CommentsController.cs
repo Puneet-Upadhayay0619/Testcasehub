@@ -23,14 +23,26 @@ public class CommentsController : ControllerBase
     private string ActorEmail => User.FindFirstValue(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Email) ?? "";
     private string ActorDisplayName => User.FindFirstValue("displayName") ?? "Unknown";
 
+    private async Task<bool> CanAccessTestCaseAsync(string testCaseId)
+    {
+        var tc = await _store.GetTestCaseAsync(testCaseId);
+        if (tc is null) return false;
+        var module = await _store.GetModuleAsync(tc.ModuleId);
+        return module is not null && User.HasCompanyAccess(module.CompanyId);
+    }
+
     [HttpGet]
-    public async Task<ActionResult<List<CommentResponse>>> GetAll(string testCaseId) =>
-        (await _store.GetCommentsAsync(testCaseId)).Select(CommentResponse.From).ToList();
+    public async Task<ActionResult<List<CommentResponse>>> GetAll(string testCaseId)
+    {
+        if (!await CanAccessTestCaseAsync(testCaseId)) return Forbid();
+        return (await _store.GetCommentsAsync(testCaseId)).Select(CommentResponse.From).ToList();
+    }
 
     [HttpPost]
     public async Task<ActionResult<CommentResponse>> Add(string testCaseId, AddCommentRequest req)
     {
         if (string.IsNullOrWhiteSpace(req.Body)) return BadRequest("Comment body is required.");
+        if (!await CanAccessTestCaseAsync(testCaseId)) return Forbid();
         var tc = await _store.GetTestCaseAsync(testCaseId);
         if (tc is null) return NotFound("Test case not found.");
 
@@ -47,6 +59,7 @@ public class CommentsController : ControllerBase
     {
         var comment = await _store.GetCommentAsync(commentId);
         if (comment is null || comment.TestCaseId != testCaseId) return NotFound();
+        if (!await CanAccessTestCaseAsync(testCaseId)) return Forbid();
 
         // Own comment: anyone can retract their own. Someone else's: Admin/Lead only (moderation).
         var isOwnComment = comment.AuthorEmail == ActorEmail;

@@ -31,10 +31,12 @@ public class TestCaseMcpTools
 
     // ---------- modules ----------
 
-    [McpServerTool(Name = "list_modules"), Description("List every module (feature area) in the Test Case Hub, with how many non-deprecated test cases each has.")]
-    public async Task<List<ModuleResponse>> ListModules()
+    [McpServerTool(Name = "list_modules"), Description("List every module (feature area) in the caller's own company, with how many non-deprecated test cases each has. SuperAdmin should use the REST API's ?companyId= instead -- this tool has no company selector.")]
+    public async Task<object> ListModules(ClaimsPrincipal user)
     {
-        var modules = await _store.GetModulesAsync();
+        var companyId = user.GetCompanyId();
+        if (companyId is null) return new { error = "SuperAdmin has no single company -- use the REST API (/api/modules?companyId=) instead." };
+        var modules = (await _store.GetModulesAsync()).Where(m => m.CompanyId == companyId).ToList();
         var counts = await _store.GetTestCaseCountsByModuleAsync();
         return modules.Select(m => new ModuleResponse(
             m.Id, m.Name, m.Code, m.Description, m.Owner, m.Status, m.CreatedAt,
@@ -42,7 +44,7 @@ public class TestCaseMcpTools
         )).ToList();
     }
 
-    [McpServerTool(Name = "create_module"), Description("Create a new module (feature area). Code is a short uppercase identifier used in generated test case IDs, e.g. 'LOY' for Loyalty.")]
+    [McpServerTool(Name = "create_module"), Description("Create a new module (feature area) in the caller's own company. Code is a short uppercase identifier used in generated test case IDs, e.g. 'LOY' for Loyalty.")]
     public async Task<object> CreateModule(
         ClaimsPrincipal user,
         [Description("Module name, e.g. 'Loyalty Points'")] string name,
@@ -55,15 +57,19 @@ public class TestCaseMcpTools
         if (!user.CanCreateModule())
             return new { error = "You do not have permission to create modules (Contributor role or above required)." };
 
+        var companyId = user.GetCompanyId();
+        if (companyId is null) return new { error = "SuperAdmin has no company to create a module in." };
+
         if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(code))
             return new { error = "Module name and code are required." };
 
         var normalizedCode = code.Trim().ToUpperInvariant();
-        if (await _store.ModuleCodeExistsAsync(normalizedCode))
+        if (await _store.ModuleCodeExistsAsync(companyId.Value, normalizedCode))
             return new { error = $"A module with code '{normalizedCode}' already exists." };
 
         var module = new Module
         {
+            CompanyId = companyId.Value,
             Name = name.Trim(), Code = normalizedCode, Description = description ?? "",
             Owner = owner ?? "", Status = string.IsNullOrWhiteSpace(status) ? "Active" : status
         };
@@ -73,6 +79,7 @@ public class TestCaseMcpTools
 
     [McpServerTool(Name = "add_task_link"), Description("Link a module to a real Dashboard/App-API/App task/ticket (e.g. an Azure DevOps item) for traceability.")]
     public async Task<object> AddTaskLink(
+        ClaimsPrincipal user,
         int moduleId,
         [Description("Dashboard, App-API, or App")] string layer,
         [Description("Source project name, e.g. 'Dashboard project'")] string adoProject,
@@ -82,6 +89,7 @@ public class TestCaseMcpTools
     {
         var module = await _store.GetModuleAsync(moduleId);
         if (module is null) return new { error = "Module not found." };
+        if (!user.HasCompanyAccess(module.CompanyId)) return new { error = "Module not found." };
         if (string.IsNullOrWhiteSpace(adoTaskId)) return new { error = "Task ID is required." };
 
         var link = new TaskLink
@@ -131,7 +139,8 @@ public class TestCaseMcpTools
     // ---------- test cases ----------
 
     [McpServerTool(Name = "list_test_cases"), Description("List test cases, optionally filtered by module, task area (layer), verification type, status, priority, or a free-text search.")]
-    public async Task<List<TestCaseResponse>> ListTestCases(
+    public async Task<object> ListTestCases(
+        ClaimsPrincipal user,
         int? moduleId = null,
         [Description("Dashboard, App-API, or App")] string? layer = null,
         [Description("UI, Database, or API-Contract")] string? verificationType = null,
@@ -139,15 +148,30 @@ public class TestCaseMcpTools
         string? priority = null,
         string? search = null)
     {
+        var companyId = user.GetCompanyId();
+        if (companyId is null) return new { error = "SuperAdmin has no single company -- use the REST API instead." };
+        if (moduleId.HasValue)
+        {
+            var m = await _store.GetModuleAsync(moduleId.Value);
+            if (m is null || m.CompanyId != companyId) return new { error = "Module not found." };
+        }
         var results = await _store.GetTestCasesAsync(new TestCaseFilter(moduleId, layer, verificationType, status, priority, search));
+        if (!moduleId.HasValue)
+        {
+            var myModuleIds = (await _store.GetModulesAsync()).Where(m => m.CompanyId == companyId).Select(m => m.Id).ToHashSet();
+            results = results.Where(t => myModuleIds.Contains(t.ModuleId)).ToList();
+        }
         return results.Select(TestCaseResponse.From).ToList();
     }
 
     [McpServerTool(Name = "get_test_case"), Description("Get one test case by its ID (e.g. TC-LOY-DSH-001).")]
-    public async Task<object> GetTestCase(string id)
+    public async Task<object> GetTestCase(string id, ClaimsPrincipal user)
     {
         var tc = await _store.GetTestCaseAsync(id);
-        return tc is null ? new { error = "Not found." } : TestCaseResponse.From(tc);
+        if (tc is null) return new { error = "Not found." };
+        var module = await _store.GetModuleAsync(tc.ModuleId);
+        if (module is null || !user.HasCompanyAccess(module.CompanyId)) return new { error = "Not found." };
+        return TestCaseResponse.From(tc);
     }
 
     [McpServerTool(Name = "create_test_case"), Description(
@@ -173,6 +197,7 @@ public class TestCaseMcpTools
         var req = new TestCaseCreateRequest(moduleId, layer, verificationType, title, preconditions ?? "",
             steps ?? new(), priority, type, status, tags ?? new(), automationReady, automationScriptRef ?? "", historyComment);
         var module = await _store.GetModuleAsync(req.ModuleId);
+        if (module is not null && !user.HasCompanyAccess(module.CompanyId)) return new { error = "Module not found." };
         var missing = TestCaseValidation.Validate(req, module is not null);
         if (missing.Count > 0) return new { missing };
 
@@ -207,6 +232,7 @@ public class TestCaseMcpTools
 
     [McpServerTool(Name = "update_test_case"), Description("Update an existing test case by ID. Same validation as create_test_case -- every attempted step needs both action and expected_result.")]
     public async Task<object> UpdateTestCase(
+        ClaimsPrincipal user,
         string id,
         int moduleId,
         string layer,
@@ -220,15 +246,17 @@ public class TestCaseMcpTools
         List<string>? tags,
         bool automationReady,
         string? automationScriptRef,
-        ClaimsPrincipal user,
         string? historyComment = null)
     {
         var tc = await _store.GetTestCaseAsync(id);
         if (tc is null) return new { error = "Not found." };
+        var existingModule = await _store.GetModuleAsync(tc.ModuleId);
+        if (existingModule is null || !user.HasCompanyAccess(existingModule.CompanyId)) return new { error = "Not found." };
 
         var req = new TestCaseCreateRequest(moduleId, layer, verificationType, title, preconditions ?? "",
             steps ?? new(), priority, type, status, tags ?? new(), automationReady, automationScriptRef ?? "", historyComment);
         var module = await _store.GetModuleAsync(req.ModuleId);
+        if (module is not null && !user.HasCompanyAccess(module.CompanyId)) return new { error = "Module not found." };
         var missing = TestCaseValidation.Validate(req, module is not null);
         if (missing.Count > 0) return new { missing };
 
@@ -259,6 +287,8 @@ public class TestCaseMcpTools
     {
         var tc = await _store.GetTestCaseAsync(id);
         if (tc is null) return new { error = "Not found." };
+        var module = await _store.GetModuleAsync(tc.ModuleId);
+        if (module is null || !user.HasCompanyAccess(module.CompanyId)) return new { error = "Not found." };
 
         var actorName = DisplayNameOf(user);
         var oldSnapshot = JsonSerializer.Serialize(TestCaseResponse.From(tc));
@@ -275,8 +305,12 @@ public class TestCaseMcpTools
     }
 
     [McpServerTool(Name = "get_test_case_history"), Description("Get the full change history (old/new snapshots) for a test case.")]
-    public async Task<List<HistoryResponse>> GetTestCaseHistory(string id)
+    public async Task<object> GetTestCaseHistory(string id, ClaimsPrincipal user)
     {
+        var tc = await _store.GetTestCaseAsync(id);
+        if (tc is null) return new List<HistoryResponse>();
+        var module = await _store.GetModuleAsync(tc.ModuleId);
+        if (module is null || !user.HasCompanyAccess(module.CompanyId)) return new List<HistoryResponse>();
         var hist = await _store.GetHistoryAsync(id);
         return hist.Select(h => new HistoryResponse(h.Id, h.TestCaseId, h.ChangedBy, h.ChangedAt, h.ChangeType, h.OldSnapshotJson, h.NewSnapshotJson, h.Comment)).ToList();
     }

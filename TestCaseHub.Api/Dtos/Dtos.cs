@@ -5,13 +5,13 @@ namespace TestCaseHub.Api.Dtos;
 
 public record RegisterRequest(string Email, string Password, string DisplayName, string? InviteCode = null);
 public record LoginRequest(string Email, string Password);
-public record AuthResponse(string Token, string Email, string DisplayName, string Role, string RefreshToken);
+public record AuthResponse(string Token, string Email, string DisplayName, string Role, string RefreshToken, int? CompanyId = null, List<int>? TeamIds = null);
 public record RefreshRequest(string RefreshToken);
 public record ForgotPasswordRequest(string Email);
 public record ResetPasswordRequest(string Token, string NewPassword);
 
 public record ModuleCreateRequest(string Name, string Code, string Description, string Owner, string Status);
-public record ModuleResponse(int Id, string Name, string Code, string Description, string Owner, string Status, DateTime CreatedAt, int TestCaseCount);
+public record ModuleResponse(int Id, string Name, string Code, string Description, string Owner, string Status, DateTime CreatedAt, int TestCaseCount, int CompanyId = 0, List<int>? TeamIds = null);
 
 public record TaskLinkCreateRequest(string Layer, string AdoProject, string AdoTaskId, string AdoTaskTitle, string AdoTaskUrl);
 public record TaskLinkResponse(int Id, int ModuleId, string Layer, string AdoProject, string AdoTaskId, string AdoTaskTitle, string AdoTaskUrl, DateTime LinkedAt);
@@ -29,7 +29,8 @@ public record TestCaseCreateRequest(
     List<TestCaseStepDto> Steps, string Priority, string Type, string Status,
     List<string> Tags, bool AutomationReady, string AutomationScriptRef,
     string? HistoryComment = null, List<int>? LinkedModuleIds = null,
-    AutomationConfigDto? AutomationConfig = null, string? SelectorStability = null
+    AutomationConfigDto? AutomationConfig = null, string? SelectorStability = null,
+    int? TeamId = null
 );
 
 public record TestCaseResponse(
@@ -37,7 +38,8 @@ public record TestCaseResponse(
     List<TestCaseStepDto> Steps, string Priority, string Type, string Status,
     List<string> Tags, bool AutomationReady, string AutomationScriptRef,
     string CreatedBy, DateTime CreatedAt, string UpdatedBy, DateTime UpdatedAt, int Version,
-    List<int> LinkedModuleIds, AutomationConfigDto? AutomationConfig, string SelectorStability
+    List<int> LinkedModuleIds, AutomationConfigDto? AutomationConfig, string SelectorStability,
+    int? TeamId
 )
 {
     public static TestCaseResponse From(TestCase tc)
@@ -49,7 +51,7 @@ public record TestCaseResponse(
             tc.Steps.Select(s => new TestCaseStepDto(s.StepNo, s.Action, s.ExpectedResult)).ToList(),
             tc.Priority, tc.Type, tc.Status, tc.Tags, tc.AutomationReady, tc.AutomationScriptRef,
             tc.CreatedBy, tc.CreatedAt, tc.UpdatedBy, tc.UpdatedAt, tc.Version, tc.LinkedModuleIds,
-            cfg, tc.SelectorStability
+            cfg, tc.SelectorStability, tc.TeamId
         );
     }
 }
@@ -58,10 +60,10 @@ public record HistoryResponse(int Id, string TestCaseId, string ChangedBy, DateT
 
 public record AddLookupRequest(string Value);
 
-public record UserResponse(int Id, string Email, string DisplayName, string Role, bool IsActive, List<string> LayerScope, List<int> ModuleScope, DateTime CreatedAt)
+public record UserResponse(int Id, string Email, string DisplayName, string Role, bool IsActive, List<string> LayerScope, List<int> ModuleScope, DateTime CreatedAt, int? CompanyId, List<int>? TeamIds = null)
 {
-    public static UserResponse From(TestCaseHub.Api.Models.User u) =>
-        new(u.Id, u.Email, u.DisplayName, u.Role, u.IsActive, u.LayerScope, u.ModuleScope, u.CreatedAt);
+    public static UserResponse From(TestCaseHub.Api.Models.User u, List<int>? teamIds = null) =>
+        new(u.Id, u.Email, u.DisplayName, u.Role, u.IsActive, u.LayerScope, u.ModuleScope, u.CreatedAt, u.CompanyId, teamIds);
 }
 
 public record UpdateUserAccessRequest(string Role, List<string>? LayerScope, List<int>? ModuleScope);
@@ -146,3 +148,26 @@ public record EnvironmentTargetResponse(int Id, string Name, string Tenant, stri
 
 public record RecordAutomatedResultRequest(string TestCaseId, string? Platform, string Status, string? Notes, string RunAttemptKey, int RetryCount);
 public record CreateBugFromResultResponse(bool Success, string? WorkItemId, string? WorkItemUrl, string? Error);
+
+// ---- Phase 8: multi-company, teams ----
+public record CompanyResponse(int Id, string Name, string Status, string CreatedBy, DateTime CreatedAt)
+{
+    public static CompanyResponse From(TestCaseHub.Api.Models.Company c) => new(c.Id, c.Name, c.Status, c.CreatedBy, c.CreatedAt);
+}
+public record CreateCompanyRequest(string Name);
+
+public record CreateCompanyAdminInviteRequest(int CompanyId, int MaxUses = 1, int ExpiresInDays = 14);
+public record CompanyAdminInviteResponse(int Id, int CompanyId, string Code, int MaxUses, int UsedCount, DateTime ExpiresAt, bool Revoked, string CreatedByEmail, DateTime CreatedAt, bool IsUsable)
+{
+    public static CompanyAdminInviteResponse From(TestCaseHub.Api.Models.CompanyAdminInvite i) =>
+        new(i.Id, i.CompanyId, i.Code, i.MaxUses, i.UsedCount, i.ExpiresAt, i.Revoked, i.CreatedByEmail, i.CreatedAt, i.IsUsable);
+}
+
+public record CreateTeamRequest(string Name, string? Description, int? CompanyId = null);
+public record TeamResponse(int Id, int CompanyId, string Name, string Description, string CreatedBy, DateTime CreatedAt, List<int> MemberUserIds, List<int> ModuleIds)
+{
+    public static TeamResponse From(TestCaseHub.Api.Models.Team t, List<int> memberUserIds, List<int> moduleIds) =>
+        new(t.Id, t.CompanyId, t.Name, t.Description, t.CreatedBy, t.CreatedAt, memberUserIds, moduleIds);
+}
+public record TeamMemberRequest(int UserId);
+public record TeamModuleRequest(int ModuleId);

@@ -11,6 +11,9 @@ namespace TestCaseHub.Api.Models;
 public class TestSuite
 {
     public int Id { get; set; }
+
+    // Phase 8: company isolation -- a suite lives in exactly one company.
+    public int CompanyId { get; set; }
     [Required, MaxLength(128)]
     public string Name { get; set; } = "";
     public string Description { get; set; } = "";

@@ -169,7 +169,8 @@ async function refreshAuthToken(){
     const data = await res.json();
     saveAuth(Object.assign({}, AUTH, {
       token: data.token, refreshToken: data.refreshToken,
-      email: data.email || AUTH.email, displayName: data.displayName || AUTH.displayName, role: data.role || AUTH.role
+      email: data.email || AUTH.email, displayName: data.displayName || AUTH.displayName, role: data.role || AUTH.role,
+      companyId: data.companyId, teamIds: data.teamIds || AUTH.teamIds || []
     }));
     return AUTH;
   })();
@@ -185,6 +186,13 @@ async function apiFetch(path, options, _isRetryAfterRefresh){
   const headers = Object.assign({ 'Content-Type': 'application/json' }, options.headers || {});
   if(AUTH && AUTH.token) headers['Authorization'] = 'Bearer ' + AUTH.token;
   const base = (AUTH && AUTH.apiBase) || '';
+  // Phase 8: SuperAdmin has no company of their own -- once they've "entered" one (Companies
+  // page -> Enter company), every API call needs to say WHICH company it's acting inside.
+  // Centralizing it here means every existing apiFetch() call site (loadX/saveX functions
+  // written long before Phase 8 existed) automatically gets this right with zero changes.
+  if(AUTH && AUTH.role === 'SuperAdmin' && state.actingCompanyId){
+    path += (path.includes('?') ? '&' : '?') + 'companyId=' + state.actingCompanyId;
+  }
   let res;
   try{
     res = await fetch(base + path, Object.assign({}, options, { headers }));
@@ -418,7 +426,7 @@ function fmtDate(iso){ if(!iso) return ''; const d = new Date(iso); return d.toL
 // DATA now mirrors whatever the server most recently returned — it is a cache for rendering,
 // not the source of truth. bootstrap() fills it after login; module selection, history expand,
 // AI-generate and import all refresh the relevant slice after they write to the server.
-let DATA = { modules: [], taskLinks: [], testCases: [], history: [], priorities: PRIORITIES.slice(), statuses: STATUSES.slice(), users: [], invites: [], notifications: [], suites: [], releases: [], testRuns: [], coverage: [], trend: [], apiKeys: [], environments: [], duplicates: [], auditLog: [] };
+let DATA = { modules: [], taskLinks: [], testCases: [], history: [], priorities: PRIORITIES.slice(), statuses: STATUSES.slice(), users: [], invites: [], notifications: [], suites: [], releases: [], testRuns: [], coverage: [], trend: [], apiKeys: [], environments: [], duplicates: [], auditLog: [], companies: [], teams: [] };
 
 let state = {
   showLogin: true,
@@ -502,6 +510,18 @@ let state = {
   showDuplicates: false,
   duplicatesLoading: false,
   showBulkEdit: false,
+  // Phase 8: multi-company / teams.
+  companiesLoading: false,
+  showCreateCompanyForm: false,
+  companyInviteBusyId: null,
+  // Which company a SuperAdmin has "entered" to act as its Admin -- null means "not acting,
+  // showing the Companies list". Set by clicking "Enter company", cleared by "Exit company".
+  actingCompanyId: null,
+  showTeams: false,
+  teamsLoading: false,
+  showCreateTeamForm: false,
+  teamDetailId: null,
+  teamAddModuleId: '',
   commentsCache: {},
   diffCache: {},
   suiteResolveCache: {},
@@ -547,6 +567,9 @@ function closeAllPanels(){
   state.showCreateEnvironment = false;
   state.showDuplicates = false;
   state.showBulkEdit = false;
+  state.showTeams = false;
+  state.showCreateTeamForm = false;
+  state.teamDetailId = null;
 }
 
 function moduleById(id){ return DATA.modules.find(m => m.id === String(id)); }
@@ -582,20 +605,38 @@ function filteredTestCases(){
   }).sort((a,b) => (a.updatedAt < b.updatedAt ? 1 : -1));
 }
 
+// Phase 8: a SuperAdmin who has "entered" a company (state.actingCompanyId set) is meant to
+// be able to do literally everything that company's own Admin could do -- the backend already
+// grants this (SuperAdmin outranks Admin in the role hierarchy everywhere), but a few UI gates
+// below check the exact string 'Admin'/'Lead' rather than "at least this level", which would
+// otherwise make a SuperAdmin-in-company-mode look MORE restricted in the UI than a real Admin.
+// Every one of those checks should read effectiveRole() instead of AUTH.role directly.
+function effectiveRole(){
+  if(AUTH && AUTH.role === 'SuperAdmin' && state.actingCompanyId) return 'Admin';
+  return AUTH && AUTH.role;
+}
+function actingCompanyName(){
+  const c = (DATA.companies || []).find(c => c.id === state.actingCompanyId);
+  return c ? c.name : ('Company #' + state.actingCompanyId);
+}
+
 // Viewer is read-only everywhere in this UI, matching the backend (Permissions.cs
 // CanEditTestCases/CanEditTaskLinks — Contributor and above). Mirrored here so Viewers don't
 // even see controls that would just come back as a 403 if clicked.
 function canEditContent(){
-  return !!(AUTH && AUTH.role && AUTH.role !== 'Viewer');
+  const r = effectiveRole();
+  return !!(AUTH && r && r !== 'Viewer');
 }
 function canManageAutomationReady(){
-  return !!(AUTH && (AUTH.role === 'Lead' || AUTH.role === 'Admin'));
+  const r = effectiveRole();
+  return !!(AUTH && (r === 'Lead' || r === 'Admin'));
 }
 // UI-only visibility gate for the Automation/Releases sidebar section -- kept separate from
 // canManageAutomationReady() even though the check is identical right now, since these two
 // rules can (and likely will) diverge later without one silently changing the other's meaning.
 function canSeeAutomationMenu(){
-  return !!(AUTH && (AUTH.role === 'Lead' || AUTH.role === 'Admin'));
+  const r = effectiveRole();
+  return !!(AUTH && (r === 'Lead' || r === 'Admin'));
 }
 
 function escapeHtml(s){
@@ -655,7 +696,7 @@ function renderLogin(){
         <h3>${mode === 'login' ? 'Log in' : 'Create an account'}</h3>
         <input type="hidden" id="loginApiBase" value="${escapeHtml(state.apiBaseInput || '')}">
         ${mode === 'register' ? `<div class="field"><label>Display name</label><input type="text" id="loginDisplayName" placeholder="e.g. Puneet"></div>` : ''}
-        ${mode === 'register' ? `<div class="field"><label>Invite code</label><input type="text" id="loginInviteCode" placeholder="Ask an Admin for one — not needed for the very first account"></div>` : ''}
+        ${mode === 'register' ? `<div class="field"><label>Invite / referral code</label><input type="text" id="loginInviteCode" placeholder="From your company's Admin (to join), or a referral code from your SuperAdmin (to become a new company's first Admin)"></div>` : ''}
         <div class="field"><label>Email</label><input type="text" id="loginEmail" placeholder="you@company.com"></div>
         <div class="field"><label>Password</label><input type="password" id="loginPassword"></div>
         ${state.loginError ? `<p style="color:#a32d2d;font-size:13px;">${escapeHtml(state.loginError)}</p>` : ''}
@@ -811,7 +852,7 @@ async function submitLogin(){
     const path = mode === 'login' ? '/api/auth/login' : '/api/auth/register';
     const body = mode === 'login' ? { email, password } : { email, password, displayName, inviteCode };
     const res = await authRequest(apiBase, path, body);
-    saveAuth({ token: res.token, refreshToken: res.refreshToken, apiBase, email: res.email || email, displayName: res.displayName || displayName, role: res.role });
+    saveAuth({ token: res.token, refreshToken: res.refreshToken, apiBase, email: res.email || email, displayName: res.displayName || displayName, role: res.role, companyId: res.companyId, teamIds: res.teamIds || [] });
     state.loginBusy = false;
     await bootstrap();
   } catch(err){
@@ -832,6 +873,19 @@ async function bootstrap(){
   }
   state.booting = true;
   render();
+  // SuperAdmin (Phase 8) spans every company rather than belonging to one -- until they
+  // explicitly "enter" a company (Companies page -> Enter company), there's no single
+  // company's modules/test cases to load, so skip straight to the Companies list. Once
+  // state.actingCompanyId is set, fall through to the SAME fetch every other role does --
+  // apiFetch() auto-appends ?companyId= for every call while acting, so this works unmodified.
+  if(AUTH.role === 'SuperAdmin' && !state.actingCompanyId){
+    state.booting = false;
+    state.showLogin = false;
+    state.loginError = null;
+    render();
+    loadCompanies();
+    return;
+  }
   try{
     const [priorities, statuses, modules] = await Promise.all([
       apiFetch('/api/lookups/priorities'),
@@ -872,6 +926,11 @@ function render(){
     app.innerHTML = `<h1>Test Case Hub</h1><p class="sub">Loading your team's test cases…</p>`;
     return;
   }
+  if(AUTH && AUTH.role === 'SuperAdmin' && !state.actingCompanyId){
+    app.innerHTML = renderSuperAdminShell();
+    wireEvents();
+    return;
+  }
   app.innerHTML = `
     <div class="topbar">
       <button type="button" class="hamburger-btn" id="hamburgerBtn" title="Collapse/expand modules menu">&#9776;</button>
@@ -879,12 +938,14 @@ function render(){
       <button type="button" class="bell-btn" id="bellBtn" title="Notifications">🔔${state.unreadCount > 0 ? `<span class="bell-badge">${state.unreadCount}</span>` : ''}</button>
       <div class="profile-widget">
         <div class="profile-info">
-          <div class="profile-name">${escapeHtml((AUTH && (AUTH.displayName || AUTH.email)) || '')}${(AUTH && AUTH.role) ? ` <span class="profile-role">${escapeHtml(AUTH.role)}</span>` : ''}</div>
+          <div class="profile-name">${escapeHtml((AUTH && (AUTH.displayName || AUTH.email)) || '')}${(AUTH && AUTH.role) ? ` <span class="profile-role">${escapeHtml(AUTH.role)}${(AUTH.role==='SuperAdmin' && state.actingCompanyId) ? ' — acting as Admin' : ''}</span>` : ''}</div>
           <div class="profile-email">${escapeHtml((AUTH && AUTH.email) || '')}</div>
         </div>
+        ${(AUTH && AUTH.role === 'SuperAdmin' && state.actingCompanyId) ? `<button type="button" id="exitCompanyBtn" class="ghost">Exit company</button>` : ''}
         <button type="button" id="logoutBtn">Logout</button>
       </div>
     </div>
+    ${(AUTH && AUTH.role === 'SuperAdmin' && state.actingCompanyId) ? `<p class="sub" style="color:var(--accent,#5b6df8);">You (SuperAdmin) are acting inside <strong>${escapeHtml(actingCompanyName())}</strong> with full Admin rights — everything you do here happens inside that company only.</p>` : ''}
     <p class="sub">Central, module-wise test case repository — independent of the Dashboard / API / App project split. ${DATA.modules.length} module(s) — pick one on the left to see its test cases.</p>
     <div class="toolbar">
       <input type="search" id="searchBox" placeholder="Search by ID, title or tag" value="${escapeHtml(state.search)}" style="min-width:220px;">
@@ -910,6 +971,7 @@ function render(){
         ${state.showEnvironments ? renderEnvironments() : ''}
         ${state.showDuplicates ? renderDuplicates() : ''}
         ${state.showBulkEdit ? renderBulkEdit() : ''}
+        ${state.showTeams ? renderTeams() : ''}
         ${isAnyPanelOpen() ? '' : renderMainArea()}
       </div>
     </div>
@@ -927,7 +989,261 @@ function renderMainArea(){
 function isAnyPanelOpen(){
   return state.showModuleMaster || state.showAddModule || state.showAddTestCase || !!state.editingId || !!state.showAddTaskLink || state.showExportPicker || state.showImport ||
     state.showManageUsers || state.showInviteLinks || state.showAuditLog || state.showNotifications || state.showSuites || state.showReleases || state.showTestRuns || state.showReports ||
-    state.showApiKeys || state.showEnvironments || state.showDuplicates || state.showBulkEdit;
+    state.showApiKeys || state.showEnvironments || state.showDuplicates || state.showBulkEdit || state.showTeams;
+}
+
+// ---------- Phase 8: SuperAdmin shell + Companies ----------
+
+function renderSuperAdminShell(){
+  return `
+    <div class="topbar">
+      <h1>Test Case Hub — Super Admin</h1>
+      <div class="profile-widget">
+        <div class="profile-info">
+          <div class="profile-name">${escapeHtml((AUTH && (AUTH.displayName || AUTH.email)) || '')} <span class="profile-role">SuperAdmin</span></div>
+          <div class="profile-email">${escapeHtml((AUTH && AUTH.email) || '')}</div>
+        </div>
+        <button type="button" id="logoutBtn">Logout</button>
+      </div>
+    </div>
+    <p class="sub">You manage companies at the platform level here — create a company, then issue its first Admin a referral code to register with. Day-to-day test case work happens inside each company's own Admin/Lead/Contributor/Viewer accounts, not here.</p>
+    <div class="main" style="max-width:900px;">
+      ${renderCompaniesPage()}
+    </div>
+  `;
+}
+
+async function loadCompanies(){
+  state.companiesLoading = true; render();
+  try{ DATA.companies = await apiFetch('/api/companies'); }
+  catch(err){ showToast('Could not load companies: ' + err.message, 'error'); }
+  state.companiesLoading = false; render();
+}
+
+async function createCompany(name){
+  try{
+    const created = await apiFetch('/api/companies', { method:'POST', body: JSON.stringify({ name }) });
+    DATA.companies = [created].concat(DATA.companies || []);
+    state.showCreateCompanyForm = false;
+    render();
+    showToast('Company created: ' + created.name, 'success');
+  } catch(err){
+    showToast('Could not create company: ' + err.message, 'error');
+  }
+}
+
+async function createCompanyAdminInvite(companyId){
+  state.companyInviteBusyId = companyId; render();
+  try{
+    const invite = await apiFetch('/api/companies/' + companyId + '/admin-invites', {
+      method:'POST', body: JSON.stringify({ companyId, maxUses: 1, expiresInDays: 14 })
+    });
+    state.companyInviteBusyId = null;
+    render();
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(invite.code).then(() => showToast('Admin referral code created and copied: ' + invite.code, 'success')).catch(() => showToast('Admin referral code: ' + invite.code, 'success'));
+    } else {
+      showToast('Admin referral code: ' + invite.code, 'success');
+    }
+  } catch(err){
+    state.companyInviteBusyId = null;
+    render();
+    showToast('Could not create referral code: ' + err.message, 'error');
+  }
+}
+
+function renderCompaniesPage(){
+  if(state.companiesLoading){
+    return `<div class="panel"><h3>Companies</h3><p class="sub" style="margin-top:-6px;">Loading…</p></div>`;
+  }
+  const rows = (DATA.companies || []).map(c => `
+    <tr>
+      <td><strong>${escapeHtml(c.name)}</strong></td>
+      <td>${c.status === 'Active' ? '<span class="badge b-active">Active</span>' : '<span class="badge b-deprecated">' + escapeHtml(c.status) + '</span>'}</td>
+      <td>${fmtDate(c.createdAt)}</td>
+      <td>
+        <button type="button" class="small ghost" data-invite-company="${c.id}" ${state.companyInviteBusyId===c.id?'disabled':''}>${state.companyInviteBusyId===c.id?'Creating…':'Generate Admin referral code'}</button>
+        <button type="button" class="small" data-enter-company="${c.id}" title="Do everything this company's Admin can do">Enter company</button>
+      </td>
+    </tr>
+  `).join('');
+
+  return `
+    <div class="panel">
+      <h3>Companies</h3>
+      <p class="sub" style="margin-top:-6px;">Every company's data (modules, test cases, users, teams) is isolated from every other company automatically — nothing below is ever shared across rows.</p>
+      ${state.showCreateCompanyForm ? `
+        <div class="grid2">
+          <div class="field"><label>Company name</label><input type="text" id="newCompanyName" placeholder="e.g. Acme Corp"></div>
+        </div>
+        <div class="actions-row">
+          <button type="button" id="saveCompanyBtn">Create company</button>
+          <button type="button" class="ghost" id="cancelCompanyBtn">Cancel</button>
+        </div>
+      ` : `<div class="actions-row"><button type="button" id="showCreateCompanyBtn">+ New company</button></div>`}
+      <table style="margin-top:14px;">
+        <thead><tr><th>Company</th><th>Status</th><th>Created</th><th></th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="4" class="empty">No companies yet — create the first one above.</td></tr>'}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+// ---------- Admin: Manage Teams ----------
+
+async function loadTeams(){
+  state.teamsLoading = true; render();
+  try{
+    DATA.teams = await apiFetch('/api/teams');
+    if(!DATA.users || !DATA.users.length) DATA.users = await apiFetch('/api/users');
+  } catch(err){
+    showToast('Could not load teams: ' + err.message, 'error');
+  }
+  state.teamsLoading = false; render();
+}
+
+async function createTeam(name, description){
+  try{
+    const created = await apiFetch('/api/teams', { method:'POST', body: JSON.stringify({ name, description }) });
+    DATA.teams = (DATA.teams || []).concat([created]);
+    state.showCreateTeamForm = false;
+    render();
+    showToast('Team created: ' + created.name, 'success');
+  } catch(err){
+    showToast('Could not create team: ' + err.message, 'error');
+  }
+}
+
+async function addTeamMember(teamId, userId){
+  try{
+    const updated = await apiFetch('/api/teams/' + teamId + '/members', { method:'POST', body: JSON.stringify({ userId }) });
+    DATA.teams = (DATA.teams || []).map(t => t.id === teamId ? updated : t);
+    render();
+    showToast('Member added.', 'success');
+  } catch(err){
+    showToast('Could not add member: ' + err.message, 'error');
+  }
+}
+
+async function removeTeamMember(teamId, userId){
+  try{
+    const updated = await apiFetch('/api/teams/' + teamId + '/members/' + userId, { method:'DELETE' });
+    DATA.teams = (DATA.teams || []).map(t => t.id === teamId ? updated : t);
+    render();
+  } catch(err){
+    showToast('Could not remove member: ' + err.message, 'error');
+  }
+}
+
+async function addTeamModule(teamId, moduleId){
+  try{
+    const updated = await apiFetch('/api/teams/' + teamId + '/modules', { method:'POST', body: JSON.stringify({ moduleId }) });
+    DATA.teams = (DATA.teams || []).map(t => t.id === teamId ? updated : t);
+    render();
+    showToast('Module assigned to team.', 'success');
+  } catch(err){
+    showToast('Could not assign module: ' + err.message, 'error');
+  }
+}
+
+async function removeTeamModule(teamId, moduleId){
+  try{
+    const updated = await apiFetch('/api/teams/' + teamId + '/modules/' + moduleId, { method:'DELETE' });
+    DATA.teams = (DATA.teams || []).map(t => t.id === teamId ? updated : t);
+    render();
+  } catch(err){
+    showToast('Could not unassign module: ' + err.message, 'error');
+  }
+}
+
+function renderTeams(){
+  if(state.teamsLoading){
+    return `<div class="panel"><h3>Manage Teams</h3><p class="sub" style="margin-top:-6px;">Loading teams…</p></div>`;
+  }
+  const detailTeam = state.teamDetailId ? (DATA.teams || []).find(t => t.id === state.teamDetailId) : null;
+  if(detailTeam) return renderTeamDetail(detailTeam);
+
+  const rows = (DATA.teams || []).map(t => `
+    <tr class="module-master-row" data-team-detail="${t.id}" style="cursor:pointer;">
+      <td><strong>${escapeHtml(t.name)}</strong>${t.description ? '<br><small class="muted">' + escapeHtml(t.description) + '</small>' : ''}</td>
+      <td>${t.memberUserIds.length} member(s)</td>
+      <td>${t.moduleIds.length} module(s)</td>
+      <td class="muted">${fmtDate(t.createdAt)}</td>
+    </tr>
+  `).join('');
+
+  return `
+    <div class="panel">
+      <h3>Manage Teams</h3>
+      <p class="sub" style="margin-top:-6px;">A team is a group of teammates who share access to a set of modules. A module can belong to more than one team — that's how two teams can both work on the same module. Click a team below to manage its members and modules.</p>
+      ${state.showCreateTeamForm ? `
+        <div class="grid2">
+          <div class="field"><label>Team name</label><input type="text" id="newTeamName" placeholder="e.g. Payments Team"></div>
+          <div class="field"><label>Description (optional)</label><input type="text" id="newTeamDescription"></div>
+        </div>
+        <div class="actions-row">
+          <button type="button" id="saveTeamBtn">Create team</button>
+          <button type="button" class="ghost" id="cancelTeamBtn">Cancel</button>
+        </div>
+      ` : `<div class="actions-row"><button type="button" id="showCreateTeamBtn">+ New team</button></div>`}
+      <table style="margin-top:14px;">
+        <thead><tr><th>Team</th><th>Members</th><th>Modules</th><th>Created</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="4" class="empty">No teams yet — create the first one above.</td></tr>'}</tbody>
+      </table>
+      <div class="actions-row"><button type="button" class="ghost" id="closeTeams">Close</button></div>
+    </div>
+  `;
+}
+
+function renderTeamDetail(t){
+  const members = (DATA.users || []).filter(u => t.memberUserIds.includes(u.id));
+  const nonMembers = (DATA.users || []).filter(u => !t.memberUserIds.includes(u.id));
+  const assignedModules = (DATA.modules || []).filter(m => t.moduleIds.includes(Number(m.id)));
+  const unassignedModules = (DATA.modules || []).filter(m => !t.moduleIds.includes(Number(m.id)));
+
+  const memberRows = members.map(u => `
+    <tr><td>${escapeHtml(u.displayName)}<br><small class="muted">${escapeHtml(u.email)}</small></td>
+      <td>${escapeHtml(u.role)}</td>
+      <td><button type="button" class="small ghost" data-remove-member="${u.id}" data-team="${t.id}">Remove</button></td></tr>
+  `).join('');
+
+  const moduleRows = assignedModules.map(m => `
+    <tr><td>${escapeHtml(m.name)} <span class="muted">(${escapeHtml(m.code)})</span></td>
+      <td><button type="button" class="small ghost" data-remove-module="${m.id}" data-team="${t.id}">Unassign</button></td></tr>
+  `).join('');
+
+  return `
+    <div class="panel">
+      <h3>${escapeHtml(t.name)}</h3>
+      <p class="sub" style="margin-top:-6px;">${escapeHtml(t.description || '')}</p>
+
+      <h4>Members</h4>
+      <table><thead><tr><th>User</th><th>Role</th><th></th></tr></thead>
+      <tbody>${memberRows || '<tr><td colspan="3" class="empty">No members yet.</td></tr>'}</tbody></table>
+      ${nonMembers.length ? `
+        <div class="actions-row">
+          <select id="teamAddMemberSelect">
+            ${nonMembers.map(u => `<option value="${u.id}">${escapeHtml(u.displayName)} (${escapeHtml(u.email)})</option>`).join('')}
+          </select>
+          <button type="button" id="addTeamMemberBtn" data-team="${t.id}">Add member</button>
+        </div>
+      ` : ''}
+
+      <h4 style="margin-top:18px;">Modules</h4>
+      <table><thead><tr><th>Module</th><th></th></tr></thead>
+      <tbody>${moduleRows || '<tr><td colspan="2" class="empty">No modules assigned yet — members of this team won\'t see any modules until you assign at least one.</td></tr>'}</tbody></table>
+      ${unassignedModules.length ? `
+        <div class="actions-row">
+          <select id="teamAddModuleSelect">
+            ${unassignedModules.map(m => `<option value="${m.id}">${escapeHtml(m.name)} (${escapeHtml(m.code)})</option>`).join('')}
+          </select>
+          <button type="button" id="addTeamModuleBtn" data-team="${t.id}">Assign module</button>
+        </div>
+      ` : ''}
+
+      <div class="actions-row" style="margin-top:14px;"><button type="button" class="ghost" id="backToTeamsList">&larr; Back to teams</button></div>
+    </div>
+  `;
 }
 
 // ---------- Admin: Manage Users ----------
@@ -1700,7 +2016,7 @@ function renderComments(testCaseId){
     <div class="hist-item">
       <strong>${escapeHtml(c.authorDisplayName)}</strong> · ${fmtDate(c.createdAt)}<br>
       ${escapeHtml(c.body)}
-      ${(AUTH && (AUTH.email === c.authorEmail || AUTH.role === 'Lead' || AUTH.role === 'Admin')) ? `<button type="button" class="small ghost" data-delete-comment="${testCaseId}" data-comment-id="${c.id}" style="margin-left:8px;">Delete</button>` : ''}
+      ${(AUTH && (AUTH.email === c.authorEmail || effectiveRole() === 'Lead' || effectiveRole() === 'Admin')) ? `<button type="button" class="small ghost" data-delete-comment="${testCaseId}" data-comment-id="${c.id}" style="margin-left:8px;">Delete</button>` : ''}
     </div>
   `).join('');
   return `
@@ -1888,16 +2204,17 @@ function renderSidebar(){
       <div class="sidebar-item menu-item sub-item" id="menuSuites" title="Test Suites"><span class="item-icon">🗂️</span><span class="item-text">Test Suites</span></div>
       <div class="sidebar-item menu-item sub-item" id="menuTestRuns" title="Test Runs"><span class="item-icon">▶️</span><span class="item-text">Test Runs</span></div>
       <div class="sidebar-item menu-item sub-item" id="menuReports" title="Reports"><span class="item-icon">📊</span><span class="item-text">Reports</span></div>
-      ${(AUTH && AUTH.role === 'Admin') ? `<div class="sidebar-item menu-item sub-item" id="menuApiKeys" title="API Keys"><span class="item-icon">🔑</span><span class="item-text">API Keys</span></div>` : ''}
-      ${(AUTH && AUTH.role === 'Admin') ? `<div class="sidebar-item menu-item sub-item" id="menuEnvironments" title="Environment Targets"><span class="item-icon">🌐</span><span class="item-text">Environment Targets</span></div>` : ''}
+      ${(AUTH && effectiveRole() === 'Admin') ? `<div class="sidebar-item menu-item sub-item" id="menuApiKeys" title="API Keys"><span class="item-icon">🔑</span><span class="item-text">API Keys</span></div>` : ''}
+      ${(AUTH && effectiveRole() === 'Admin') ? `<div class="sidebar-item menu-item sub-item" id="menuEnvironments" title="Environment Targets"><span class="item-icon">🌐</span><span class="item-text">Environment Targets</span></div>` : ''}
       ` : ''}
       ` : ''}
-      ${(AUTH && AUTH.role === 'Admin') ? `
+      ${(AUTH && effectiveRole() === 'Admin') ? `
       <div class="sidebar-item menu-item" id="menuAdminGroup" title="Admin Activity">
         <span class="item-icon">🛡️</span><span class="item-text">Admin Activity ${state.adminMenuOpen ? '▾' : '▸'}</span>
       </div>
       ${state.adminMenuOpen ? `
       <div class="sidebar-item menu-item sub-item" id="menuManageUsers" title="Manage Users"><span class="item-icon">👥</span><span class="item-text">Manage Users</span></div>
+      <div class="sidebar-item menu-item sub-item" id="menuTeams" title="Manage Teams"><span class="item-icon">🧑‍🤝‍🧑</span><span class="item-text">Manage Teams</span></div>
       <div class="sidebar-item menu-item sub-item" id="menuInviteLinks" title="Invite Links"><span class="item-icon">🎟️</span><span class="item-text">Invite Links</span></div>
       <div class="sidebar-item menu-item sub-item" id="menuAuditLog" title="Audit Log"><span class="item-icon">📜</span><span class="item-text">Audit Log</span></div>
       ` : ''}
@@ -2278,6 +2595,7 @@ function wireEvents(){
     DATA.priorities = PRIORITIES.slice(); DATA.statuses = STATUSES.slice();
     state.moduleFilter = 'all'; state.expandedId = null; state.historyCache = {};
     state.showLogin = true; state.loginMode = 'login'; state.loginError = null;
+    state.actingCompanyId = null;
     render();
     showToast('Logged out.', 'success');
   });
@@ -2344,6 +2662,89 @@ function wireEvents(){
   });
   const closeAuditLog = document.getElementById('closeAuditLog');
   if(closeAuditLog) closeAuditLog.addEventListener('click', () => { state.showAuditLog = false; render(); });
+
+  // ---------------- Phase 8: Companies (SuperAdmin) ----------------
+  const showCreateCompanyBtn = document.getElementById('showCreateCompanyBtn');
+  if(showCreateCompanyBtn) showCreateCompanyBtn.addEventListener('click', () => { state.showCreateCompanyForm = true; render(); });
+  const cancelCompanyBtn = document.getElementById('cancelCompanyBtn');
+  if(cancelCompanyBtn) cancelCompanyBtn.addEventListener('click', () => { state.showCreateCompanyForm = false; render(); });
+  const saveCompanyBtn = document.getElementById('saveCompanyBtn');
+  if(saveCompanyBtn) saveCompanyBtn.addEventListener('click', () => {
+    const name = document.getElementById('newCompanyName').value.trim();
+    if(!name){ showToast('Company name is required.', 'error'); return; }
+    createCompany(name);
+  });
+  document.querySelectorAll('[data-invite-company]').forEach(el => el.addEventListener('click', () => {
+    createCompanyAdminInvite(Number(el.dataset.inviteCompany));
+  }));
+  document.querySelectorAll('[data-enter-company]').forEach(el => el.addEventListener('click', () => {
+    state.actingCompanyId = Number(el.dataset.enterCompany);
+    // Reset whatever the last real Admin session left behind so nothing from a previous
+    // company (or from before entering any company) leaks into this one's view.
+    DATA.modules = []; DATA.testCases = []; DATA.taskLinks = []; DATA.history = [];
+    DATA.users = []; DATA.teams = []; DATA.suites = []; DATA.releases = []; DATA.testRuns = [];
+    DATA.apiKeys = []; DATA.environments = []; DATA.invites = []; DATA.auditLog = [];
+    state.moduleFilter = 'all';
+    bootstrap();
+  }));
+  const exitCompanyBtn = document.getElementById('exitCompanyBtn');
+  if(exitCompanyBtn) exitCompanyBtn.addEventListener('click', () => {
+    state.actingCompanyId = null;
+    DATA.modules = []; DATA.testCases = []; DATA.taskLinks = []; DATA.history = [];
+    DATA.users = []; DATA.teams = []; DATA.suites = []; DATA.releases = []; DATA.testRuns = [];
+    DATA.apiKeys = []; DATA.environments = []; DATA.invites = []; DATA.auditLog = [];
+    closeAllPanels();
+    state.moduleFilter = 'all';
+    bootstrap();
+  });
+
+  // ---------------- Phase 8: Manage Teams (Admin) ----------------
+  const menuTeams = document.getElementById('menuTeams');
+  if(menuTeams) menuTeams.addEventListener('click', () => {
+    const next = !state.showTeams;
+    closeAllPanels();
+    state.showTeams = next;
+    state.teamDetailId = null;
+    render();
+    if(next) loadTeams();
+  });
+  const closeTeams = document.getElementById('closeTeams');
+  if(closeTeams) closeTeams.addEventListener('click', () => { state.showTeams = false; render(); });
+  const showCreateTeamBtn = document.getElementById('showCreateTeamBtn');
+  if(showCreateTeamBtn) showCreateTeamBtn.addEventListener('click', () => { state.showCreateTeamForm = true; render(); });
+  const cancelTeamBtn = document.getElementById('cancelTeamBtn');
+  if(cancelTeamBtn) cancelTeamBtn.addEventListener('click', () => { state.showCreateTeamForm = false; render(); });
+  const saveTeamBtn = document.getElementById('saveTeamBtn');
+  if(saveTeamBtn) saveTeamBtn.addEventListener('click', () => {
+    const name = document.getElementById('newTeamName').value.trim();
+    const description = document.getElementById('newTeamDescription').value.trim();
+    if(!name){ showToast('Team name is required.', 'error'); return; }
+    createTeam(name, description);
+  });
+  document.querySelectorAll('[data-team-detail]').forEach(el => el.addEventListener('click', () => {
+    state.teamDetailId = Number(el.dataset.teamDetail);
+    render();
+  }));
+  const backToTeamsList = document.getElementById('backToTeamsList');
+  if(backToTeamsList) backToTeamsList.addEventListener('click', () => { state.teamDetailId = null; render(); });
+  const addTeamMemberBtn = document.getElementById('addTeamMemberBtn');
+  if(addTeamMemberBtn) addTeamMemberBtn.addEventListener('click', () => {
+    const teamId = Number(addTeamMemberBtn.dataset.team);
+    const userId = Number(document.getElementById('teamAddMemberSelect').value);
+    addTeamMember(teamId, userId);
+  });
+  document.querySelectorAll('[data-remove-member]').forEach(el => el.addEventListener('click', () => {
+    removeTeamMember(Number(el.dataset.team), Number(el.dataset.removeMember));
+  }));
+  const addTeamModuleBtn = document.getElementById('addTeamModuleBtn');
+  if(addTeamModuleBtn) addTeamModuleBtn.addEventListener('click', () => {
+    const teamId = Number(addTeamModuleBtn.dataset.team);
+    const moduleId = Number(document.getElementById('teamAddModuleSelect').value);
+    addTeamModule(teamId, moduleId);
+  });
+  document.querySelectorAll('[data-remove-module]').forEach(el => el.addEventListener('click', () => {
+    removeTeamModule(Number(el.dataset.team), Number(el.dataset.removeModule));
+  }));
 
   const generateInviteBtn = document.getElementById('generateInviteBtn');
   if(generateInviteBtn) generateInviteBtn.addEventListener('click', () => {

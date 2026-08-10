@@ -23,23 +23,32 @@ public class TestRunsController : ControllerBase
     private string ActorDisplayName => User.FindFirstValue("displayName") ?? "Unknown";
 
     [HttpGet]
-    public async Task<ActionResult<List<TestRunResponse>>> GetAll([FromQuery] int? releaseId) =>
-        (await _store.GetTestRunsAsync(releaseId)).Select(TestRunResponse.From).ToList();
+    public async Task<ActionResult<List<TestRunResponse>>> GetAll([FromQuery] int? releaseId, [FromQuery] int? companyId = null)
+    {
+        var effective = User.IsSuperAdmin() ? companyId : User.GetCompanyId();
+        if (effective is null) return User.IsSuperAdmin() ? BadRequest("SuperAdmin must specify ?companyId=.") : Forbid();
+        return (await _store.GetTestRunsAsync(releaseId)).Where(r => r.CompanyId == effective).Select(TestRunResponse.From).ToList();
+    }
 
     [HttpGet("{id:int}")]
     public async Task<ActionResult<TestRunResponse>> GetOne(int id)
     {
         var run = await _store.GetTestRunAsync(id);
-        return run is null ? NotFound() : TestRunResponse.From(run);
+        if (run is null) return NotFound();
+        if (!User.HasCompanyAccess(run.CompanyId)) return Forbid();
+        return TestRunResponse.From(run);
     }
 
     [HttpPost]
-    public async Task<ActionResult<TestRunResponse>> Create(CreateTestRunRequest req)
+    public async Task<ActionResult<TestRunResponse>> Create(CreateTestRunRequest req, [FromQuery] int? companyId = null)
     {
         if (!User.IsAtLeast(Roles.Contributor)) return Forbid();
+        companyId = User.ResolveActingCompanyId(companyId);
+        if (companyId is null) return User.IsSuperAdmin() ? BadRequest("SuperAdmin must specify ?companyId=.") : Forbid();
         if (string.IsNullOrWhiteSpace(req.Name)) return BadRequest("Test run name is required.");
         var run = new TestRun
         {
+            CompanyId = companyId.Value,
             ReleaseId = req.ReleaseId, SuiteId = req.SuiteId, Name = req.Name.Trim(),
             TargetEnvironment = req.TargetEnvironment ?? "", EnvironmentTargetId = req.EnvironmentTargetId, CreatedBy = ActorDisplayName
         };
@@ -48,12 +57,22 @@ public class TestRunsController : ControllerBase
     }
 
     [HttpGet("{id:int}/results")]
-    public async Task<ActionResult<List<TestRunResultResponse>>> GetResults(int id) =>
-        (await _store.GetTestRunResultsAsync(id)).Select(TestRunResultResponse.From).ToList();
+    public async Task<ActionResult<List<TestRunResultResponse>>> GetResults(int id)
+    {
+        var run = await _store.GetTestRunAsync(id);
+        if (run is null) return NotFound();
+        if (!User.HasCompanyAccess(run.CompanyId)) return Forbid();
+        return (await _store.GetTestRunResultsAsync(id)).Select(TestRunResultResponse.From).ToList();
+    }
 
     [HttpGet("{id:int}/rollup")]
-    public async Task<ActionResult<TestRunRollup>> GetRollup(int id) =>
-        RollupCalculator.Compute(await _store.GetTestRunResultsAsync(id));
+    public async Task<ActionResult<TestRunRollup>> GetRollup(int id)
+    {
+        var run = await _store.GetTestRunAsync(id);
+        if (run is null) return NotFound();
+        if (!User.HasCompanyAccess(run.CompanyId)) return Forbid();
+        return RollupCalculator.Compute(await _store.GetTestRunResultsAsync(id));
+    }
 
     // Manual execution recording (Phase 5) — for whatever hasn't been automated yet, a tester
     // records Pass/Fail/Blocked/Skipped themselves. Every authenticated role can record a
@@ -64,6 +83,7 @@ public class TestRunsController : ControllerBase
     {
         var run = await _store.GetTestRunAsync(id);
         if (run is null) return NotFound("Test run not found.");
+        if (!User.HasCompanyAccess(run.CompanyId)) return Forbid();
         var tc = await _store.GetTestCaseAsync(req.TestCaseId);
         if (tc is null) return BadRequest("Test case not found.");
 
@@ -93,19 +113,25 @@ public class TestRunsController : ControllerBase
     public async Task<ActionResult<TestRunResultResponse>> RecordAutomatedResult(int id, RecordAutomatedResultRequest req)
     {
         string executedBy;
+        int callerCompanyId;
         if (User.Identity?.IsAuthenticated == true)
         {
             executedBy = $"Automated (via {ActorDisplayName})";
+            var jwtCompanyId = User.GetCompanyId();
+            if (jwtCompanyId is null) return Forbid();
+            callerCompanyId = jwtCompanyId.Value;
         }
         else
         {
             var apiKey = await _apiKeys.ValidateAsync(Request.Headers["X-Api-Key"].FirstOrDefault() ?? "");
             if (apiKey is null) return Unauthorized("A valid JWT or X-Api-Key header is required.");
             executedBy = $"Automated (CI: {apiKey.Name})";
+            callerCompanyId = apiKey.CompanyId;
         }
 
         var run = await _store.GetTestRunAsync(id);
         if (run is null) return NotFound("Test run not found.");
+        if (run.CompanyId != callerCompanyId) return Forbid();
 
         // Test-data safety: automation is hard-blocked from posting results against a run
         // targeting a Production environment — this doesn't stop the automation from having
@@ -152,6 +178,9 @@ public class TestRunsController : ControllerBase
     public async Task<ActionResult<CreateBugFromResultResponse>> CreateBug(int id, int resultId)
     {
         if (!User.IsAtLeast(Roles.Contributor)) return Forbid();
+        var run = await _store.GetTestRunAsync(id);
+        if (run is null) return NotFound("Test run not found.");
+        if (!User.HasCompanyAccess(run.CompanyId)) return Forbid();
         var results = await _store.GetTestRunResultsAsync(id);
         var result = results.FirstOrDefault(r => r.Id == resultId);
         if (result is null) return NotFound("Result not found.");

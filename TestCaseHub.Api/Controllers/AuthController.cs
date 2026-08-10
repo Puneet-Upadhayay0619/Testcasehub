@@ -35,23 +35,46 @@ public class AuthController : ControllerBase
         if (await _store.GetUserByEmailAsync(normalizedEmail) is not null)
             return Conflict("An account with this email already exists.");
 
-        // Bootstrap rule (agreed in planning): the very first account ever created on a fresh
-        // deployment becomes Admin automatically (nobody else could have invited them — there
-        // is no Admin yet to do it). Every account after that MUST come through a valid,
-        // Admin-issued invite link (Phase 2) — open self-registration is closed the moment a
-        // first (Admin) user exists, and every invite-based signup lands as Viewer regardless
-        // of who issued the invite, matching the agreed default.
+        // Bootstrap rule (agreed in planning, extended Phase 8): the very first account ever
+        // created on a fresh deployment becomes SuperAdmin automatically (nobody could have
+        // created a company or issued a referral code before this moment — there's nothing
+        // else it could be). Every account after that MUST come through one of two codes:
+        //   - a Company-Admin referral code (CompanyAdminInvite, SuperAdmin-issued) -> becomes
+        //     that brand-new company's first Admin.
+        //   - an ordinary invite link (InviteLink, Admin-issued) -> joins that Admin's existing
+        //     company as Viewer, exactly as before Phase 8.
+        // Open self-registration is closed the moment a first (SuperAdmin) user exists.
         var isFirstUser = await _store.CountUsersAsync() == 0;
         InviteLink? invite = null;
+        CompanyAdminInvite? adminInvite = null;
+        int? companyId = null;
+        var role = Models.Roles.Viewer;
 
-        if (!isFirstUser)
+        if (isFirstUser)
+        {
+            role = Models.Roles.SuperAdmin; // companyId stays null -- SuperAdmin spans every company.
+        }
+        else
         {
             var code = (req.InviteCode ?? "").Trim();
             if (string.IsNullOrEmpty(code))
-                return BadRequest("An invite code is required to register (ask an Admin for one).");
+                return BadRequest("An invite code is required to register (ask an Admin, or your SuperAdmin, for one).");
+
             invite = await _store.GetInviteLinkByCodeAsync(code);
-            if (invite is null || !invite.IsUsable)
-                return BadRequest("This invite code is invalid, expired, already used up, or has been revoked.");
+            if (invite is not null && invite.IsUsable)
+            {
+                companyId = invite.CompanyId;
+                role = Models.Roles.Viewer;
+            }
+            else
+            {
+                invite = null;
+                adminInvite = await _store.GetCompanyAdminInviteByCodeAsync(code);
+                if (adminInvite is null || !adminInvite.IsUsable)
+                    return BadRequest("This invite code is invalid, expired, already used up, or has been revoked.");
+                companyId = adminInvite.CompanyId;
+                role = Models.Roles.Admin;
+            }
         }
 
         var user = new User
@@ -59,7 +82,8 @@ public class AuthController : ControllerBase
             Email = normalizedEmail,
             PasswordHash = BCrypt.Net.BCrypt.HashPassword(req.Password),
             DisplayName = req.DisplayName.Trim(),
-            Role = isFirstUser ? Models.Roles.Admin : Models.Roles.Viewer
+            Role = role,
+            CompanyId = companyId
         };
         user = await _store.CreateUserAsync(user);
 
@@ -68,17 +92,24 @@ public class AuthController : ControllerBase
             invite.UsedCount += 1;
             await _store.UpdateInviteLinkAsync(invite);
         }
+        if (adminInvite is not null)
+        {
+            adminInvite.UsedCount += 1;
+            await _store.UpdateCompanyAdminInviteAsync(adminInvite);
+        }
 
         await _store.AddAuditLogAsync(new AuditLog
         {
+            CompanyId = user.CompanyId,
             ActorEmail = user.Email, ActorDisplayName = user.DisplayName,
-            Action = isFirstUser ? "BootstrapAdminCreated" : "UserRegisteredViaInvite",
+            Action = isFirstUser ? "BootstrapSuperAdminCreated" : adminInvite is not null ? "CompanyAdminRegistered" : "UserRegisteredViaInvite",
             TargetDescription = user.Email,
-            DetailsJson = System.Text.Json.JsonSerializer.Serialize(new { user.Role, inviteCode = invite?.Code })
+            DetailsJson = System.Text.Json.JsonSerializer.Serialize(new { user.Role, user.CompanyId, inviteCode = invite?.Code ?? adminInvite?.Code })
         });
 
         var refreshToken = await _refresh.IssueAsync(user.Id);
-        return Ok(new AuthResponse(_jwt.GenerateToken(user), user.Email, user.DisplayName, user.Role, refreshToken));
+        var teamIds = await _store.GetTeamIdsForUserAsync(user.Id);
+        return Ok(new AuthResponse(_jwt.GenerateToken(user, teamIds), user.Email, user.DisplayName, user.Role, refreshToken, user.CompanyId, teamIds));
     }
 
     [HttpPost("login")]
@@ -97,7 +128,8 @@ public class AuthController : ControllerBase
             return Unauthorized("This account has been deactivated. Contact an Admin.");
 
         var refreshToken = await _refresh.IssueAsync(user.Id);
-        return Ok(new AuthResponse(_jwt.GenerateToken(user), user.Email, user.DisplayName, user.Role, refreshToken));
+        var teamIds = await _store.GetTeamIdsForUserAsync(user.Id);
+        return Ok(new AuthResponse(_jwt.GenerateToken(user, teamIds), user.Email, user.DisplayName, user.Role, refreshToken, user.CompanyId, teamIds));
     }
 
     // Exchanges a still-valid refresh token for a brand-new access token (JWT) + a rotated
@@ -111,7 +143,8 @@ public class AuthController : ControllerBase
         var result = await _refresh.RedeemAsync(req.RefreshToken);
         if (result is null) return Unauthorized("Refresh token is invalid, expired, or already used — please log in again.");
         var (user, newRefreshToken) = result.Value;
-        return Ok(new AuthResponse(_jwt.GenerateToken(user), user.Email, user.DisplayName, user.Role, newRefreshToken));
+        var teamIds = await _store.GetTeamIdsForUserAsync(user.Id);
+        return Ok(new AuthResponse(_jwt.GenerateToken(user, teamIds), user.Email, user.DisplayName, user.Role, newRefreshToken, user.CompanyId, teamIds));
     }
 
     // Deliberately returns the exact same generic response whether or not the email exists —

@@ -8,6 +8,9 @@ namespace TestCaseHub.Api.Models;
 public class ApiKey
 {
     public int Id { get; set; }
+
+    // Phase 8: company isolation -- a CI key belongs to exactly one company.
+    public int CompanyId { get; set; }
     [Required, MaxLength(128)]
     public string Name { get; set; } = "";
     [Required, MaxLength(128)]
@@ -36,6 +39,9 @@ public static class EnvironmentType
 public class EnvironmentTarget
 {
     public int Id { get; set; }
+
+    // Phase 8: company isolation.
+    public int CompanyId { get; set; }
     [Required, MaxLength(128)]
     public string Name { get; set; } = "";
     [MaxLength(64)]

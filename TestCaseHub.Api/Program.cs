@@ -210,9 +210,155 @@ if (storageMode == "SqlServer")
         {
             // Tables already exist from a previous deploy -- nothing to do.
         }
+
+        // Phase 8 (multi-company/teams) schema delta. CreateTables() above only helps a
+        // BRAND-NEW database -- on an already-populated one (our real Supabase DB) it throws
+        // 42P07 on the very first table and the catch above skips the WHOLE call, so none of
+        // these genuinely-new tables/columns ever get created that way. Every statement here
+        // is written to be safe to run on EVERY startup, on EITHER a brand-new DB (where
+        // everything already exists from CreateTables() above, so this is all no-ops) or an
+        // existing one (where this IS what adds the new tables/columns) -- IF NOT EXISTS /
+        // ADD COLUMN IF NOT EXISTS everywhere, no exception handling needed because Postgres
+        // itself treats these as idempotent.
+        var deltaSql = new[]
+        {
+            // New tables.
+            @"CREATE TABLE IF NOT EXISTS ""Companies"" (
+                ""Id"" serial PRIMARY KEY,
+                ""Name"" varchar(256) NOT NULL,
+                ""Status"" varchar(32) NOT NULL DEFAULT 'Active',
+                ""CreatedBy"" varchar(256) NOT NULL DEFAULT '',
+                ""CreatedAt"" timestamp with time zone NOT NULL DEFAULT now()
+            );",
+            @"CREATE TABLE IF NOT EXISTS ""CompanyAdminInvites"" (
+                ""Id"" serial PRIMARY KEY,
+                ""CompanyId"" integer NOT NULL,
+                ""Code"" varchar(64) NOT NULL,
+                ""MaxUses"" integer NOT NULL DEFAULT 1,
+                ""UsedCount"" integer NOT NULL DEFAULT 0,
+                ""ExpiresAt"" timestamp with time zone NOT NULL,
+                ""Revoked"" boolean NOT NULL DEFAULT false,
+                ""CreatedByEmail"" varchar(256) NOT NULL DEFAULT '',
+                ""CreatedAt"" timestamp with time zone NOT NULL DEFAULT now()
+            );",
+            @"CREATE UNIQUE INDEX IF NOT EXISTS ""IX_CompanyAdminInvites_Code"" ON ""CompanyAdminInvites"" (""Code"");",
+            @"CREATE TABLE IF NOT EXISTS ""Teams"" (
+                ""Id"" serial PRIMARY KEY,
+                ""CompanyId"" integer NOT NULL,
+                ""Name"" varchar(128) NOT NULL,
+                ""Description"" text NOT NULL DEFAULT '',
+                ""CreatedBy"" varchar(256) NOT NULL DEFAULT '',
+                ""CreatedAt"" timestamp with time zone NOT NULL DEFAULT now()
+            );",
+            @"CREATE TABLE IF NOT EXISTS ""TeamMembers"" (
+                ""Id"" serial PRIMARY KEY,
+                ""TeamId"" integer NOT NULL,
+                ""UserId"" integer NOT NULL,
+                ""AddedAt"" timestamp with time zone NOT NULL DEFAULT now()
+            );",
+            @"CREATE UNIQUE INDEX IF NOT EXISTS ""IX_TeamMembers_TeamId_UserId"" ON ""TeamMembers"" (""TeamId"",""UserId"");",
+            @"CREATE TABLE IF NOT EXISTS ""TeamModules"" (
+                ""Id"" serial PRIMARY KEY,
+                ""TeamId"" integer NOT NULL,
+                ""ModuleId"" integer NOT NULL,
+                ""AssignedAt"" timestamp with time zone NOT NULL DEFAULT now()
+            );",
+            @"CREATE UNIQUE INDEX IF NOT EXISTS ""IX_TeamModules_TeamId_ModuleId"" ON ""TeamModules"" (""TeamId"",""ModuleId"");",
+
+            // New columns on existing tables. Non-nullable ones use DEFAULT 0 -- Postgres 11+
+            // applies that default to every EXISTING row as a fast metadata-only change, no
+            // full table rewrite, so this is safe to run against a live, populated table.
+            // 0 doubles as our "not yet assigned to a company" backfill sentinel (handled by
+            // the seeding step right after this block).
+            @"ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""CompanyId"" integer NULL;",
+            @"ALTER TABLE ""Modules"" ADD COLUMN IF NOT EXISTS ""CompanyId"" integer NOT NULL DEFAULT 0;",
+            @"ALTER TABLE ""TestCases"" ADD COLUMN IF NOT EXISTS ""TeamId"" integer NULL;",
+            @"ALTER TABLE ""TestSuites"" ADD COLUMN IF NOT EXISTS ""CompanyId"" integer NOT NULL DEFAULT 0;",
+            @"ALTER TABLE ""Releases"" ADD COLUMN IF NOT EXISTS ""CompanyId"" integer NOT NULL DEFAULT 0;",
+            @"ALTER TABLE ""TestRuns"" ADD COLUMN IF NOT EXISTS ""CompanyId"" integer NOT NULL DEFAULT 0;",
+            @"ALTER TABLE ""ApiKeys"" ADD COLUMN IF NOT EXISTS ""CompanyId"" integer NOT NULL DEFAULT 0;",
+            @"ALTER TABLE ""EnvironmentTargets"" ADD COLUMN IF NOT EXISTS ""CompanyId"" integer NOT NULL DEFAULT 0;",
+            @"ALTER TABLE ""InviteLinks"" ADD COLUMN IF NOT EXISTS ""CompanyId"" integer NOT NULL DEFAULT 0;",
+            @"ALTER TABLE ""AuditLogs"" ADD COLUMN IF NOT EXISTS ""CompanyId"" integer NULL;",
+
+            // Module.Code used to be globally unique; now only unique WITHIN a company.
+            @"DROP INDEX IF EXISTS ""IX_Modules_Code"";",
+            @"CREATE UNIQUE INDEX IF NOT EXISTS ""IX_Modules_CompanyId_Code"" ON ""Modules"" (""CompanyId"",""Code"");",
+        };
+        foreach (var stmt in deltaSql)
+            await db.Database.ExecuteSqlRawAsync(stmt);
     }
     else
         db.Database.EnsureCreated();
+}
+
+// Phase 8 seed/backfill -- runs on EVERY startup, for EVERY storage mode (JsonFile, Sqlite,
+// Postgres, SqlServer all go through IDataStore identically here), and is safe to re-run:
+//   1) Make sure at least one Company exists ("Default Company") so pre-Phase-8 data has
+//      somewhere to land the first time this code ever runs.
+//   2) Backfill anything created before Phase 8 existed (CompanyId is null, or 0 -- the "not
+//      yet assigned" sentinel used for the non-nullable columns) into that Default Company,
+//      and put all of it into one "Default Team" so nobody who could already see a module
+//      loses that access the moment this code first runs.
+//   3) Explicitly promote puneet@flick2know.com to SuperAdmin, per explicit instruction --
+//      self-correcting on every startup (not just the first), and detach them from any
+//      company, matching what SuperAdmin means everywhere else in this codebase.
+using (var seedScope = app.Services.CreateScope())
+{
+    var seedStore = seedScope.ServiceProvider.GetRequiredService<IDataStore>();
+
+    var companies = await seedStore.GetCompaniesAsync();
+    var defaultCompany = companies.FirstOrDefault(c => c.Name == "Default Company");
+    if (defaultCompany is null)
+        defaultCompany = await seedStore.CreateCompanyAsync(new TestCaseHub.Api.Models.Company { Name = "Default Company", CreatedBy = "system" });
+
+    var allUsers = await seedStore.GetUsersAsync();
+    foreach (var u in allUsers.Where(u => u.CompanyId is null && u.Role != TestCaseHub.Api.Models.Roles.SuperAdmin))
+    {
+        u.CompanyId = defaultCompany.Id;
+        await seedStore.UpdateUserAsync(u);
+    }
+
+    var allModules = await seedStore.GetModulesAsync();
+    var backfilledModules = allModules.Where(m => m.CompanyId == 0).ToList();
+    foreach (var m in backfilledModules)
+    {
+        m.CompanyId = defaultCompany.Id;
+        await seedStore.UpdateModuleAsync(m);
+    }
+
+    foreach (var s in (await seedStore.GetSuitesAsync()))
+        if (s.CompanyId == 0) { s.CompanyId = defaultCompany.Id; await seedStore.UpdateSuiteAsync(s); }
+    foreach (var r in (await seedStore.GetReleasesAsync()))
+        if (r.CompanyId == 0) { r.CompanyId = defaultCompany.Id; await seedStore.UpdateReleaseAsync(r); }
+    foreach (var tr in (await seedStore.GetTestRunsAsync(null)))
+        if (tr.CompanyId == 0) { tr.CompanyId = defaultCompany.Id; await seedStore.UpdateTestRunAsync(tr); }
+    foreach (var k in (await seedStore.GetApiKeysAsync()))
+        if (k.CompanyId == 0) { k.CompanyId = defaultCompany.Id; await seedStore.UpdateApiKeyAsync(k); }
+    foreach (var e in (await seedStore.GetEnvironmentTargetsAsync()))
+        if (e.CompanyId == 0) { e.CompanyId = defaultCompany.Id; await seedStore.UpdateEnvironmentTargetAsync(e); }
+    foreach (var i in (await seedStore.GetInviteLinksAsync()))
+        if (i.CompanyId == 0) { i.CompanyId = defaultCompany.Id; await seedStore.UpdateInviteLinkAsync(i); }
+
+    // Default Team: everyone already in Default Company, every module already in Default
+    // Company -- so pre-Phase-8 users keep seeing exactly what they could see before.
+    var defaultTeams = await seedStore.GetTeamsAsync(defaultCompany.Id);
+    var defaultTeam = defaultTeams.FirstOrDefault(t => t.Name == "Default Team");
+    if (defaultTeam is null)
+        defaultTeam = await seedStore.CreateTeamAsync(new TestCaseHub.Api.Models.Team { CompanyId = defaultCompany.Id, Name = "Default Team", CreatedBy = "system" });
+    foreach (var u in (await seedStore.GetUsersAsync()).Where(u => u.CompanyId == defaultCompany.Id))
+        await seedStore.AddTeamMemberAsync(defaultTeam.Id, u.Id);
+    foreach (var m in (await seedStore.GetModulesAsync()).Where(m => m.CompanyId == defaultCompany.Id))
+        await seedStore.AddTeamModuleAsync(defaultTeam.Id, m.Id);
+
+    var superAdminEmail = "puneet@flick2know.com";
+    var superAdminUser = await seedStore.GetUserByEmailAsync(superAdminEmail);
+    if (superAdminUser is not null && superAdminUser.Role != TestCaseHub.Api.Models.Roles.SuperAdmin)
+    {
+        superAdminUser.Role = TestCaseHub.Api.Models.Roles.SuperAdmin;
+        superAdminUser.CompanyId = null;
+        await seedStore.UpdateUserAsync(superAdminUser);
+    }
 }
 
 if (app.Environment.IsDevelopment())

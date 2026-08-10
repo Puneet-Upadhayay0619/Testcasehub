@@ -18,8 +18,9 @@ public class EfCoreDataStore : IDataStore
 
     public Task<List<Module>> GetModulesAsync() => _db.Modules.ToListAsync();
     public Task<Module?> GetModuleAsync(int id) => _db.Modules.FirstOrDefaultAsync(m => m.Id == id);
-    public Task<bool> ModuleCodeExistsAsync(string code) => _db.Modules.AnyAsync(m => m.Code == code);
+    public Task<bool> ModuleCodeExistsAsync(int companyId, string code) => _db.Modules.AnyAsync(m => m.CompanyId == companyId && m.Code == code);
     public async Task<Module> CreateModuleAsync(Module module) { _db.Modules.Add(module); await _db.SaveChangesAsync(); return module; }
+    public async Task<Module> UpdateModuleAsync(Module module) { await _db.SaveChangesAsync(); return module; }
 
     public Task<Dictionary<int, int>> GetTestCaseCountsByModuleAsync() =>
         _db.TestCases.Where(t => t.Status != "Deprecated").GroupBy(t => t.ModuleId)
@@ -101,6 +102,7 @@ public class EfCoreDataStore : IDataStore
         _db.TestRuns.Where(t => releaseId == null || t.ReleaseId == releaseId).OrderByDescending(t => t.CreatedAt).ToListAsync();
     public Task<TestRun?> GetTestRunAsync(int id) => _db.TestRuns.FirstOrDefaultAsync(t => t.Id == id);
     public async Task<TestRun> CreateTestRunAsync(TestRun run) { _db.TestRuns.Add(run); await _db.SaveChangesAsync(); return run; }
+    public async Task<TestRun> UpdateTestRunAsync(TestRun run) { await _db.SaveChangesAsync(); return run; }
 
     public Task<List<TestRunResult>> GetTestRunResultsAsync(int testRunId) =>
         _db.TestRunResults.Where(r => r.TestRunId == testRunId).OrderBy(r => r.ExecutedAt).ToListAsync();
@@ -133,4 +135,60 @@ public class EfCoreDataStore : IDataStore
     public Task<EnvironmentTarget?> GetEnvironmentTargetAsync(int id) => _db.EnvironmentTargets.FirstOrDefaultAsync(e => e.Id == id);
     public async Task<EnvironmentTarget> CreateEnvironmentTargetAsync(EnvironmentTarget env) { _db.EnvironmentTargets.Add(env); await _db.SaveChangesAsync(); return env; }
     public async Task<EnvironmentTarget> UpdateEnvironmentTargetAsync(EnvironmentTarget env) { await _db.SaveChangesAsync(); return env; }
+
+    // ---- Phase 8: multi-company, teams ----
+    public async Task<Company> CreateCompanyAsync(Company company) { _db.Companies.Add(company); await _db.SaveChangesAsync(); return company; }
+    public Task<List<Company>> GetCompaniesAsync() => _db.Companies.OrderBy(c => c.Name).ToListAsync();
+    public Task<Company?> GetCompanyAsync(int id) => _db.Companies.FirstOrDefaultAsync(c => c.Id == id);
+    public async Task<Company> UpdateCompanyAsync(Company company) { await _db.SaveChangesAsync(); return company; }
+
+    public async Task<CompanyAdminInvite> CreateCompanyAdminInviteAsync(CompanyAdminInvite invite) { _db.CompanyAdminInvites.Add(invite); await _db.SaveChangesAsync(); return invite; }
+    public Task<CompanyAdminInvite?> GetCompanyAdminInviteByCodeAsync(string code) => _db.CompanyAdminInvites.FirstOrDefaultAsync(i => i.Code == code);
+    public Task<List<CompanyAdminInvite>> GetCompanyAdminInvitesAsync(int? companyId) =>
+        _db.CompanyAdminInvites.Where(i => companyId == null || i.CompanyId == companyId).OrderByDescending(i => i.CreatedAt).ToListAsync();
+    public async Task<CompanyAdminInvite> UpdateCompanyAdminInviteAsync(CompanyAdminInvite invite) { await _db.SaveChangesAsync(); return invite; }
+
+    public async Task<Team> CreateTeamAsync(Team team) { _db.Teams.Add(team); await _db.SaveChangesAsync(); return team; }
+    public Task<List<Team>> GetTeamsAsync(int companyId) => _db.Teams.Where(t => t.CompanyId == companyId).OrderBy(t => t.Name).ToListAsync();
+    public Task<Team?> GetTeamAsync(int id) => _db.Teams.FirstOrDefaultAsync(t => t.Id == id);
+    public async Task<Team> UpdateTeamAsync(Team team) { await _db.SaveChangesAsync(); return team; }
+
+    public async Task AddTeamMemberAsync(int teamId, int userId)
+    {
+        if (await _db.TeamMembers.AnyAsync(tm => tm.TeamId == teamId && tm.UserId == userId)) return;
+        _db.TeamMembers.Add(new TeamMember { TeamId = teamId, UserId = userId });
+        await _db.SaveChangesAsync();
+    }
+    public async Task RemoveTeamMemberAsync(int teamId, int userId)
+    {
+        var row = await _db.TeamMembers.FirstOrDefaultAsync(tm => tm.TeamId == teamId && tm.UserId == userId);
+        if (row is null) return;
+        _db.TeamMembers.Remove(row);
+        await _db.SaveChangesAsync();
+    }
+    public async Task<List<User>> GetTeamMembersAsync(int teamId)
+    {
+        var userIds = await _db.TeamMembers.Where(tm => tm.TeamId == teamId).Select(tm => tm.UserId).ToListAsync();
+        return await _db.Users.Where(u => userIds.Contains(u.Id)).ToListAsync();
+    }
+    public Task<List<int>> GetTeamIdsForUserAsync(int userId) =>
+        _db.TeamMembers.Where(tm => tm.UserId == userId).Select(tm => tm.TeamId).ToListAsync();
+
+    public async Task AddTeamModuleAsync(int teamId, int moduleId)
+    {
+        if (await _db.TeamModules.AnyAsync(tm => tm.TeamId == teamId && tm.ModuleId == moduleId)) return;
+        _db.TeamModules.Add(new TeamModule { TeamId = teamId, ModuleId = moduleId });
+        await _db.SaveChangesAsync();
+    }
+    public async Task RemoveTeamModuleAsync(int teamId, int moduleId)
+    {
+        var row = await _db.TeamModules.FirstOrDefaultAsync(tm => tm.TeamId == teamId && tm.ModuleId == moduleId);
+        if (row is null) return;
+        _db.TeamModules.Remove(row);
+        await _db.SaveChangesAsync();
+    }
+    public Task<List<int>> GetModuleIdsForTeamAsync(int teamId) =>
+        _db.TeamModules.Where(tm => tm.TeamId == teamId).Select(tm => tm.ModuleId).ToListAsync();
+    public Task<List<int>> GetTeamIdsForModuleAsync(int moduleId) =>
+        _db.TeamModules.Where(tm => tm.ModuleId == moduleId).Select(tm => tm.TeamId).ToListAsync();
 }

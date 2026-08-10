@@ -9,6 +9,9 @@ namespace TestCaseHub.Api.Models;
 public class AuditLog
 {
     public int Id { get; set; }
+
+    // Phase 8: company isolation. Null for SuperAdmin-level actions (creating a company, etc.)
+    public int? CompanyId { get; set; }
     [MaxLength(256)]
     public string ActorEmail { get; set; } = "";
     [MaxLength(128)]
@@ -29,6 +32,9 @@ public class AuditLog
 public class InviteLink
 {
     public int Id { get; set; }
+
+    // Phase 8: which company this invite adds new users into.
+    public int CompanyId { get; set; }
     [Required, MaxLength(64)]
     public string Code { get; set; } = "";
     public int MaxUses { get; set; } = 1;
