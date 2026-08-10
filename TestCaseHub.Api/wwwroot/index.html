@@ -1873,6 +1873,7 @@ function renderSidebar(){
       ${canEditContent() ? `<div class="sidebar-item menu-item sub-item" id="menuDuplicates" title="Find duplicate test cases"><span class="item-icon">🔎</span><span class="item-text">Find duplicates</span></div>` : ''}
       ${canEditContent() ? `<div class="sidebar-item menu-item sub-item" id="menuBulkEdit" title="Bulk edit test cases"><span class="item-icon">🧮</span><span class="item-text">Bulk edit</span></div>` : ''}
       ` : ''}
+      ${canEditContent() ? `
       <div class="sidebar-item menu-item" id="menuReleases" title="Releases"><span class="item-icon">🚀</span><span class="item-text">Releases</span></div>
       <div class="sidebar-item menu-item" id="menuAutomationGroup" title="Automation">
         <span class="item-icon">🤖</span><span class="item-text">Automation ${state.automationMenuOpen ? '▾' : '▸'}</span>
@@ -1883,6 +1884,7 @@ function renderSidebar(){
       <div class="sidebar-item menu-item sub-item" id="menuReports" title="Reports"><span class="item-icon">📊</span><span class="item-text">Reports</span></div>
       ${(AUTH && AUTH.role === 'Admin') ? `<div class="sidebar-item menu-item sub-item" id="menuApiKeys" title="API Keys"><span class="item-icon">🔑</span><span class="item-text">API Keys</span></div>` : ''}
       ${(AUTH && AUTH.role === 'Admin') ? `<div class="sidebar-item menu-item sub-item" id="menuEnvironments" title="Environment Targets"><span class="item-icon">🌐</span><span class="item-text">Environment Targets</span></div>` : ''}
+      ` : ''}
       ` : ''}
       ${(AUTH && AUTH.role === 'Admin') ? `
       <div class="sidebar-item menu-item" id="menuAdminGroup" title="Admin Activity">
