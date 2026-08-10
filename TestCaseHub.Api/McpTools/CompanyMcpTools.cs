@@ -123,4 +123,88 @@ public class CompanyMcpTools
 
         return new AssignUsersByDomainResult(matched.Count, matched.Select(u => u.Email).ToList());
     }
+
+    [McpServerTool(Name = "list_all_modules"), Description(
+        "SuperAdmin only. List every module across every company (with company id/name and test case count) -- " +
+        "use this to find a module's id and current company before calling move_module_to_company. " +
+        "Regular Admin/Contributor/etc. should use list_modules instead (scoped to their own company).")]
+    public async Task<object> ListAllModules(ClaimsPrincipal user)
+    {
+        if (!user.CanManageCompanies())
+            return new { error = "You do not have permission to manage companies (SuperAdmin only)." };
+
+        var modules = await _store.GetModulesAsync();
+        var companies = (await _store.GetCompaniesAsync()).ToDictionary(c => c.Id, c => c.Name);
+        var counts = await _store.GetTestCaseCountsByModuleAsync();
+
+        return modules
+            .OrderBy(m => m.CompanyId).ThenBy(m => m.Name)
+            .Select(m => new
+            {
+                m.Id,
+                m.Name,
+                m.Code,
+                m.CompanyId,
+                CompanyName = companies.TryGetValue(m.CompanyId, out var cn) ? cn : "(unknown company)",
+                TestCaseCount = counts.TryGetValue(m.Id, out var c) ? c : 0
+            })
+            .ToList();
+    }
+
+    [McpServerTool(Name = "move_module_to_company"), Description(
+        "SuperAdmin only. Moves a module into a different company. Test cases are NOT stored with their own " +
+        "CompanyId -- they inherit it from their module -- so every test case under this module moves along " +
+        "with it automatically; nothing else needs to be done for the test cases. Any team<->module links from " +
+        "the module's old company are removed (a team in company A cannot see a module now owned by company B).")]
+    public async Task<object> MoveModuleToCompany(ClaimsPrincipal user, int moduleId, int targetCompanyId)
+    {
+        if (!user.CanManageCompanies())
+            return new { error = "You do not have permission to manage companies (SuperAdmin only)." };
+
+        var module = await _store.GetModuleAsync(moduleId);
+        if (module is null) return new { error = "Module not found." };
+
+        var targetCompany = await _store.GetCompanyAsync(targetCompanyId);
+        if (targetCompany is null) return new { error = "Target company not found." };
+
+        if (module.CompanyId == targetCompanyId)
+            return new { error = $"Module '{module.Name}' is already in {targetCompany.Name}." };
+
+        if (await _store.ModuleCodeExistsAsync(targetCompanyId, module.Code))
+            return new { error = $"Target company already has a module with code '{module.Code}'. Rename one of them first." };
+
+        var fromCompanyId = module.CompanyId;
+        var fromCompany = await _store.GetCompanyAsync(fromCompanyId);
+
+        // Drop team<->module links from the old company -- those teams belong to fromCompany and
+        // have no business seeing a module that now lives in targetCompanyId.
+        var staleTeamIds = await _store.GetTeamIdsForModuleAsync(moduleId);
+        foreach (var teamId in staleTeamIds)
+            await _store.RemoveTeamModuleAsync(teamId, moduleId);
+
+        module.CompanyId = targetCompanyId;
+        await _store.UpdateModuleAsync(module);
+
+        var testCaseCount = (await _store.GetTestCaseCountsByModuleAsync()).TryGetValue(moduleId, out var c) ? c : 0;
+
+        await _store.AddAuditLogAsync(new AuditLog
+        {
+            CompanyId = targetCompanyId, ActorEmail = EmailOf(user), ActorDisplayName = EmailOf(user), Action = "ModuleMovedToCompany",
+            TargetDescription = module.Name,
+            DetailsJson = System.Text.Json.JsonSerializer.Serialize(new
+            {
+                moduleId, module.Code, fromCompanyId, fromCompanyName = fromCompany?.Name,
+                toCompanyId = targetCompanyId, toCompanyName = targetCompany.Name,
+                testCasesMoved = testCaseCount, teamLinksRemoved = staleTeamIds.Count, via = "mcp"
+            })
+        });
+
+        return new
+        {
+            ok = true, moduleId, moduleName = module.Name,
+            fromCompanyId, fromCompanyName = fromCompany?.Name,
+            toCompanyId = targetCompanyId, toCompanyName = targetCompany.Name,
+            testCasesMoved = testCaseCount, teamLinksRemoved = staleTeamIds.Count
+        };
+    }
 }

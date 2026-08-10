@@ -391,5 +391,4 @@ app.MapGet("/health", async (IDataStore store) =>
 // actual /reset-password file or controller action. Without this, that link would just 404.
 // index.html itself checks the "token" query parameter and shows the reset form when present.
 app.MapFallbackToFile("index.html");
-
 app.Run();
