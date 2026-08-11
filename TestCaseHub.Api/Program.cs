@@ -9,6 +9,21 @@ using TestCaseHub.Api.Data;
 using TestCaseHub.Api.Services;
 using TestCaseHub.Api.Storage;
 
+// Fix for a real production crash: "The configured user limit (128) on the number of inotify
+// instances has been reached" during WebApplication.CreateBuilder(args). ASP.NET Core's default
+// config sources (appsettings.json / appsettings.{Environment}.json) are added with
+// reloadOnChange:true, which sets up a FileSystemWatcher (one inotify instance) per file. On a
+// constrained/shared host like Render's free tier, that watcher setup can fail outright once the
+// container-wide inotify instance limit is exhausted -- and since this happens inside
+// CreateBuilder itself, it's an unhandled exception that kills the whole process before it can
+// even start listening (explaining the repeated "Instance failed: exited with status 139"
+// crash-loop). Production has no need to live-reload appsettings.json anyway, so disabling this
+// removes our app's only use of file-watching entirely. Must be set before CreateBuilder runs --
+// setting it here (in-process) has the same effect as setting the environment variable
+// DOTNET_hostBuilder__reloadConfigOnChange=false in Render's dashboard, without depending on
+// someone remembering to configure that separately.
+Environment.SetEnvironmentVariable("DOTNET_hostBuilder__reloadConfigOnChange", "false");
+
 var builder = WebApplication.CreateBuilder(args);
 
 // Render (and most PaaS hosts) hand the app a PORT env var and expect it to bind there on
