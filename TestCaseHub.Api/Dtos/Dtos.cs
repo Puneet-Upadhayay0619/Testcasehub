@@ -151,6 +151,8 @@ public record RecordAutomatedResultRequest(string TestCaseId, string? Platform, 
 public record CreateBugFromResultResponse(bool Success, string? WorkItemId, string? WorkItemUrl, string? Error);
 
 // ---- Phase 8: multi-company, teams ----
+public record UpdateCompanyStatusRequest(string Status);
+
 public record CompanyResponse(int Id, string Name, string Status, string CreatedBy, DateTime CreatedAt)
 {
     public static CompanyResponse From(TestCaseHub.Api.Models.Company c) => new(c.Id, c.Name, c.Status, c.CreatedBy, c.CreatedAt);

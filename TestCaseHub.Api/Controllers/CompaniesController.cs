@@ -89,6 +89,32 @@ public class CompaniesController : ControllerBase
         return CompanyAdminInviteResponse.From(invite);
     }
 
+    // Reversible alternative to deleting a company outright -- Suspended companies keep all
+    // their data (modules/test cases/teams/users) exactly as-is, they're just flagged so it's
+    // obvious at a glance the company is no longer active. Nothing currently blocks a
+    // Suspended company's users from logging in/working -- this is a visibility flag for
+    // SuperAdmin, not an access-control mechanism (that would be a separate, bigger change).
+    [HttpPut("{id:int}/status")]
+    public async Task<ActionResult<CompanyResponse>> UpdateStatus(int id, UpdateCompanyStatusRequest req)
+    {
+        if (!User.CanManageCompanies()) return Forbid();
+        var company = await _store.GetCompanyAsync(id);
+        if (company is null) return NotFound("Company not found.");
+        if (req.Status != "Active" && req.Status != "Suspended")
+            return BadRequest("Status must be 'Active' or 'Suspended'.");
+
+        var before = company.Status;
+        company.Status = req.Status;
+        company = await _store.UpdateCompanyAsync(company);
+
+        await _store.AddAuditLogAsync(new AuditLog
+        {
+            CompanyId = id, ActorEmail = ActorEmail, ActorDisplayName = ActorEmail, Action = "CompanyStatusChanged",
+            TargetDescription = company.Name, DetailsJson = System.Text.Json.JsonSerializer.Serialize(new { before, after = company.Status })
+        });
+        return CompanyResponse.From(company);
+    }
+
     [HttpGet("{id:int}/admin-invites")]
     public async Task<ActionResult<List<CompanyAdminInviteResponse>>> GetAdminInvites(int id)
     {

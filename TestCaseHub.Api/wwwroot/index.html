@@ -1068,6 +1068,19 @@ async function assignUsersByDomain(companyId, domain){
   }
 }
 
+async function setCompanyStatus(companyId, status){
+  try{
+    const updated = await apiFetch('/api/companies/' + companyId + '/status', {
+      method: 'PUT', body: JSON.stringify({ status })
+    });
+    DATA.companies = (DATA.companies || []).map(c => c.id === companyId ? updated : c);
+    render();
+    showToast(updated.name + ' is now ' + updated.status + '.', 'success');
+  } catch(err){
+    showToast('Could not update company status: ' + err.message, 'error');
+  }
+}
+
 function renderCompaniesPage(){
   if(state.companiesLoading){
     return `<div class="panel"><h3>Companies</h3><p class="sub" style="margin-top:-6px;">Loading…</p></div>`;
@@ -1081,6 +1094,9 @@ function renderCompaniesPage(){
         <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
           <button type="button" class="small ghost" data-invite-company="${c.id}" ${state.companyInviteBusyId===c.id?'disabled':''}>${state.companyInviteBusyId===c.id?'Creating…':'Generate Admin referral code'}</button>
           <button type="button" class="small" data-enter-company="${c.id}" title="Do everything this company's Admin can do">Enter company</button>
+          ${c.status === 'Active'
+            ? `<button type="button" class="small ghost" data-suspend-company="${c.id}" title="Reversible -- keeps all data, just flags it inactive">Suspend</button>`
+            : `<button type="button" class="small ghost" data-reactivate-company="${c.id}">Reactivate</button>`}
         </div>
         <div style="display:flex;gap:6px;margin-top:6px;align-items:center;">
           <input type="text" class="assign-domain-input" data-company="${c.id}" placeholder="e.g. gmail.com" style="max-width:160px;">
@@ -2739,6 +2755,14 @@ function wireEvents(){
   });
   document.querySelectorAll('[data-invite-company]').forEach(el => el.addEventListener('click', () => {
     createCompanyAdminInvite(Number(el.dataset.inviteCompany));
+  }));
+  document.querySelectorAll('[data-suspend-company]').forEach(el => el.addEventListener('click', () => {
+    const id = Number(el.dataset.suspendCompany);
+    if(!confirm('Suspend this company? All its data stays intact -- this only flags it as inactive, reversible any time.')) return;
+    setCompanyStatus(id, 'Suspended');
+  }));
+  document.querySelectorAll('[data-reactivate-company]').forEach(el => el.addEventListener('click', () => {
+    setCompanyStatus(Number(el.dataset.reactivateCompany), 'Active');
   }));
   document.querySelectorAll('[data-assign-domain]').forEach(el => el.addEventListener('click', () => {
     const companyId = Number(el.dataset.assignDomain);

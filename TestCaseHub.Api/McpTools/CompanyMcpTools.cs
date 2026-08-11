@@ -337,4 +337,31 @@ public class CompanyMcpTools
 
         return UserResponse.From(target, await _store.GetTeamIdsForUserAsync(target.Id));
     }
+
+    [McpServerTool(Name = "set_company_status"), Description(
+        "SuperAdmin only. Reversible alternative to deleting a company -- Suspend it (all its data stays intact, " +
+        "just flagged as inactive) or Reactivate it back to Active. This tool never deletes anything.")]
+    public async Task<object> SetCompanyStatus(ClaimsPrincipal user, int companyId, [Description("'Active' or 'Suspended'")] string status)
+    {
+        if (!user.CanManageCompanies())
+            return new { error = "You do not have permission to manage companies (SuperAdmin only)." };
+        if (status != "Active" && status != "Suspended")
+            return new { error = "Status must be 'Active' or 'Suspended'." };
+
+        var company = await _store.GetCompanyAsync(companyId);
+        if (company is null) return new { error = "Company not found." };
+
+        var before = company.Status;
+        company.Status = status;
+        company = await _store.UpdateCompanyAsync(company);
+
+        await _store.AddAuditLogAsync(new AuditLog
+        {
+            CompanyId = companyId, ActorEmail = EmailOf(user), ActorDisplayName = EmailOf(user), Action = "CompanyStatusChanged",
+            TargetDescription = company.Name,
+            DetailsJson = System.Text.Json.JsonSerializer.Serialize(new { before, after = company.Status, via = "mcp" })
+        });
+
+        return CompanyResponse.From(company);
+    }
 }
