@@ -16,6 +16,8 @@
   button{ border:1px solid var(--accent); background:var(--accent); color:#fff; border-radius:6px; padding:7px 12px; cursor:pointer; }
   button.secondary{ background:#fff; color:var(--accent); }
   button.ghost{ background:#fff; color:var(--text-2); border-color:var(--border); }
+  button.danger{ background:#fff; color:var(--danger); border-color:var(--danger); }
+  button.danger:hover{ background:var(--danger); color:#fff; }
   button.small{ padding:4px 8px; font-size:12px; }
   .layout{ display:flex; gap:16px; align-items:flex-start; }
   .sidebar{ width:220px; flex:0 0 220px; border:1px solid var(--border); border-radius:8px; overflow:hidden; }
@@ -511,6 +513,7 @@ let state = {
   showDuplicates: false,
   duplicatesLoading: false,
   showBulkEdit: false,
+  showBulkDelete: false,
   // Phase 8: multi-company / teams.
   companiesLoading: false,
   showCreateCompanyForm: false,
@@ -568,6 +571,7 @@ function closeAllPanels(){
   state.showCreateEnvironment = false;
   state.showDuplicates = false;
   state.showBulkEdit = false;
+  state.showBulkDelete = false;
   state.showTeams = false;
   state.showCreateTeamForm = false;
   state.teamDetailId = null;
@@ -973,6 +977,7 @@ function render(){
         ${state.showEnvironments ? renderEnvironments() : ''}
         ${state.showDuplicates ? renderDuplicates() : ''}
         ${state.showBulkEdit ? renderBulkEdit() : ''}
+        ${state.showBulkDelete ? renderBulkDelete() : ''}
         ${state.showTeams ? renderTeams() : ''}
         ${isAnyPanelOpen() ? '' : renderMainArea()}
       </div>
@@ -991,7 +996,7 @@ function renderMainArea(){
 function isAnyPanelOpen(){
   return state.showModuleMaster || state.showAddModule || state.showAddTestCase || !!state.editingId || !!state.showAddTaskLink || state.showExportPicker || state.showImport ||
     state.showManageUsers || state.showInviteLinks || state.showAuditLog || state.showNotifications || state.showSuites || state.showReleases || state.showTestRuns || state.showReports ||
-    state.showApiKeys || state.showEnvironments || state.showDuplicates || state.showBulkEdit || state.showTeams;
+    state.showApiKeys || state.showEnvironments || state.showDuplicates || state.showBulkEdit || state.showBulkDelete || state.showTeams;
 }
 
 // ---------- Phase 8: SuperAdmin shell + Companies ----------
@@ -2055,6 +2060,36 @@ function renderBulkEdit(){
   `;
 }
 
+async function submitBulkDelete(idsCsv){
+  const ids = idsCsv.split(',').map(s=>s.trim()).filter(Boolean);
+  if(!ids.length){ showToast('Enter at least one test case ID.', 'error'); return; }
+  if(!confirm('Permanently delete ' + ids.length + ' test case(s)? This cannot be undone from the UI.')) return;
+  try{
+    const result = await apiFetch('/api/testcases/bulk-delete', { method:'POST', body: JSON.stringify({ ids }) });
+    const parts = [result.deleted.length + ' deleted'];
+    if(result.notFound.length) parts.push(result.notFound.length + ' not found');
+    if(result.forbidden.length) parts.push(result.forbidden.length + ' not accessible');
+    showToast('Bulk delete: ' + parts.join(', ') + '.', (result.notFound.length || result.forbidden.length) ? 'error' : 'success');
+    if(state.moduleFilter !== 'all') await loadModuleData(state.moduleFilter);
+    await refreshModules();
+    state.showBulkDelete = false;
+    render();
+  } catch(err){ showToast('Could not bulk delete: ' + err.message, 'error'); }
+}
+function renderBulkDelete(){
+  return `
+    <div class="panel">
+      <h3>Bulk delete test cases</h3>
+      <p class="sub" style="margin-top:-6px;">Permanently deletes every test case ID listed below. This cannot be undone from the UI.</p>
+      <div class="field"><label>Test case IDs (comma-separated)</label><textarea id="bulkDeleteIds" style="min-height:60px;" placeholder="TC-RETAIL-DSH-001, TC-RETAIL-DSH-002"></textarea></div>
+      <div class="actions-row">
+        <button type="button" class="danger" id="applyBulkDeleteBtn">Delete</button>
+        <button type="button" class="ghost" id="closeBulkDelete">Cancel</button>
+      </div>
+    </div>
+  `;
+}
+
 // ---------------- Comments (on test case detail) ----------------
 async function loadComments(testCaseId){
   try{
@@ -2263,10 +2298,11 @@ function renderSidebar(){
       </div>
       ${canEditContent() ? `<div class="sidebar-item menu-item sub-item" id="menuAddModule" title="Add module"><span class="item-icon">➕</span><span class="item-text">Add module</span></div>` : ''}
       ${canEditContent() ? `<div class="sidebar-item menu-item sub-item" id="menuAddTestCase" title="Add test case"><span class="item-icon">📝</span><span class="item-text">Add test case</span></div>` : ''}
-      ${canEditContent() ? `<div class="sidebar-item menu-item sub-item" id="menuImport" title="Import from spreadsheet"><span class="item-icon">📥</span><span class="item-text">Import from spreadsheet</span></div>` : ''}
       <div class="sidebar-item menu-item sub-item" id="menuDownload" title="Download test cases"><span class="item-icon">📤</span><span class="item-text">Download test cases${exportScopeLabel()}</span></div>
+      ${canEditContent() ? `<div class="sidebar-item menu-item sub-item" id="menuImport" title="Import from spreadsheet"><span class="item-icon">📥</span><span class="item-text">Import from spreadsheet</span></div>` : ''}
       ${canEditContent() ? `<div class="sidebar-item menu-item sub-item" id="menuDuplicates" title="Find duplicate test cases"><span class="item-icon">🔎</span><span class="item-text">Find duplicates</span></div>` : ''}
       ${canEditContent() ? `<div class="sidebar-item menu-item sub-item" id="menuBulkEdit" title="Bulk edit test cases"><span class="item-icon">🧮</span><span class="item-text">Bulk edit</span></div>` : ''}
+      ${canEditContent() ? `<div class="sidebar-item menu-item sub-item" id="menuBulkDelete" title="Bulk delete test cases"><span class="item-icon">🗑️</span><span class="item-text">Bulk delete</span></div>` : ''}
       ` : ''}
       ${canSeeAutomationMenu() ? `
       <div class="sidebar-item menu-item" id="menuReleases" title="Releases"><span class="item-icon">🚀</span><span class="item-text">Releases</span></div>
@@ -2306,12 +2342,7 @@ function renderFilters(){
       const cnt = modTcs.filter(t => t.layer === l.v).length;
       return `<div class="chip ${state.layerFilter.includes(l.v)?'active':''}" data-layer="${l.v}">${l.label} (${cnt})</div>`;
     }).join('');
-    const downloadRow = (fmt, label) => `<button class="small ghost" data-export-mod="${state.moduleFilter}" data-export-format="${fmt}">All (module)</button>` +
-      LAYERS.map(l => `<button class="small ghost" data-export-mod="${state.moduleFilter}" data-export-layer="${l.v}" data-export-format="${fmt}">${l.label}</button>`).join('');
-    moduleTabs = `<div class="sub" style="margin:0 0 6px;">Task areas for <strong>${mod?escapeHtml(mod.name):''}</strong> — pick one or more to see just those tasks test cases:</div><div class="chips">${allTab}${tabs}</div>
-      <div class="chips" style="margin-top:-4px;"><span class="muted" style="font-size:11px;align-self:center;">Download as CSV:</span>${downloadRow('csv')}</div>
-      <div class="chips" style="margin-top:-4px;"><span class="muted" style="font-size:11px;align-self:center;">Download as XLSX:</span>${downloadRow('xlsx')}</div>
-      <div class="chips" style="margin-top:-4px;"><span class="muted" style="font-size:11px;align-self:center;">Download as JSON:</span>${downloadRow('json')}</div>`;
+    moduleTabs = `<div class="sub" style="margin:0 0 6px;">Task areas for <strong>${mod?escapeHtml(mod.name):''}</strong> — pick one or more to see just those tasks test cases:</div><div class="chips">${allTab}${tabs}</div>`;
   }
   const layerChips = `<div class="chip ${state.layerFilter.length===0?'active':''}" data-layer="all">All task areas</div>` +
     LAYERS.map(l => `<div class="chip ${state.layerFilter.includes(l.v)?'active':''}" data-layer="${l.v}">${escapeHtml(l.label)}</div>`).join('');
@@ -2404,6 +2435,7 @@ function renderDetail(tc){
       <div class="actions-row">
         ${canEditContent() ? `<button class="small secondary" data-edit="${tc.id}">Edit</button>` : ''}
         ${canEditContent() && tc.status !== 'Deprecated' ? `<button class="small ghost" data-deprecate="${tc.id}">Mark deprecated</button>` : ''}
+        ${canEditContent() ? `<button class="small danger" data-delete-tc="${tc.id}">Delete</button>` : ''}
         <button class="small ghost" data-close="1">Close</button>
       </div>
     </div>
@@ -3155,6 +3187,21 @@ function wireEvents(){
     );
   });
 
+  // ---------------- Bulk delete ----------------
+  const menuBulkDelete = document.getElementById('menuBulkDelete');
+  if(menuBulkDelete) menuBulkDelete.addEventListener('click', () => {
+    const next = !state.showBulkDelete;
+    closeAllPanels();
+    state.showBulkDelete = next;
+    render();
+  });
+  const closeBulkDelete = document.getElementById('closeBulkDelete');
+  if(closeBulkDelete) closeBulkDelete.addEventListener('click', () => { state.showBulkDelete = false; render(); });
+  const applyBulkDeleteBtn = document.getElementById('applyBulkDeleteBtn');
+  if(applyBulkDeleteBtn) applyBulkDeleteBtn.addEventListener('click', () => {
+    submitBulkDelete(document.getElementById('bulkDeleteIds').value);
+  });
+
   // ---------------- Comments ----------------
   document.querySelectorAll('[data-add-comment]').forEach(el => el.addEventListener('click', e => {
     e.stopPropagation();
@@ -3268,13 +3315,6 @@ function wireEvents(){
   const cancelExportBtn = document.getElementById('cancelExport');
   if(cancelExportBtn) cancelExportBtn.addEventListener('click', () => { state.showExportPicker = false; render(); });
 
-  document.querySelectorAll('[data-export-mod]').forEach(el => el.addEventListener('click', async e => {
-    e.stopPropagation();
-    el.disabled = true;
-    await doExport(el.dataset.exportMod, el.dataset.exportLayer ? [el.dataset.exportLayer] : null, el.dataset.exportFormat || 'csv', null);
-    el.disabled = false;
-  }));
-
   document.querySelectorAll('[data-mod]').forEach(el => el.addEventListener('click', () => selectModule(el.dataset.mod)));
   document.querySelectorAll('[data-layer]').forEach(el => el.addEventListener('click', () => {
     const val = el.dataset.layer;
@@ -3344,6 +3384,25 @@ function wireEvents(){
       showToast('Test case ' + id + ' marked deprecated.', 'success');
     } catch(err){
       showToast('Could not mark deprecated: ' + err.message, 'error');
+      el.disabled = false;
+    }
+  }));
+
+  document.querySelectorAll('[data-delete-tc]').forEach(el => el.addEventListener('click', async e => {
+    e.stopPropagation();
+    const id = el.dataset.deleteTc;
+    if(!confirm('Permanently delete ' + id + '? This cannot be undone from the UI.')) return;
+    el.disabled = true;
+    try{
+      await apiFetch('/api/testcases/' + encodeURIComponent(id), { method:'DELETE' });
+      delete state.historyCache[id];
+      state.expandedId = null;
+      await loadModuleData(state.moduleFilter);
+      await refreshModules();
+      render();
+      showToast('Test case ' + id + ' deleted.', 'success');
+    } catch(err){
+      showToast('Could not delete: ' + err.message, 'error');
       el.disabled = false;
     }
   }));
@@ -3932,7 +3991,7 @@ async function doExport(moduleId, layers, format, verificationTypes){
     downloadFile(bytes, baseName + '.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   } else {
     const csv = buildCsv(tcs);
-    downloadFile('﻿' + csv, baseName + '.csv', 'text/csv;charset=utf-8;');
+    downloadFile('\ufeff' + csv, baseName + '.csv', 'text/csv;charset=utf-8;');
   }
   showToast('Download started — ' + tcs.length + ' test case(s).', 'success');
 }

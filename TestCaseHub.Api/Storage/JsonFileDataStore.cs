@@ -257,6 +257,13 @@ public class JsonFileDataStore : IDataStore
             return tc;
         });
 
+    public Task DeleteTestCaseAsync(string id) =>
+        WithLockAsync(async () =>
+        {
+            _data.TestCases.RemoveAll(t => t.Id == id);
+            await PersistAsync();
+        });
+
     public Task AddHistoryAsync(TestCaseHistory history) =>
         WithLockAsync(async () =>
         {

@@ -30,6 +30,7 @@ public interface IDataStore
     Task<int> CountTestCasesWithPrefixAsync(string prefix);
     Task<TestCase> CreateTestCaseAsync(TestCase tc);
     Task<TestCase> UpdateTestCaseAsync(TestCase tc);
+    Task DeleteTestCaseAsync(string id);
 
     Task AddHistoryAsync(TestCaseHistory history);
     Task<List<TestCaseHistory>> GetHistoryAsync(string testCaseId);

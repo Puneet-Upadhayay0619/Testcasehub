@@ -46,6 +46,17 @@ public class EfCoreDataStore : IDataStore
 
     public async Task<TestCase> CreateTestCaseAsync(TestCase tc) { _db.TestCases.Add(tc); await _db.SaveChangesAsync(); return tc; }
     public async Task<TestCase> UpdateTestCaseAsync(TestCase tc) { await _db.SaveChangesAsync(); return tc; }
+    public async Task DeleteTestCaseAsync(string id)
+    {
+        var tc = await _db.TestCases.FindAsync(id);
+        if (tc is null) return;
+        _db.TestCases.Remove(tc);
+        await _db.SaveChangesAsync();
+        // History/Comments rows for this id are deliberately left in place -- they have no
+        // formal FK to TestCase, so this doesn't violate anything, and keeping them means the
+        // audit trail ("this test case existed, here's its full history, here's who deleted it
+        // and when") survives the deletion itself.
+    }
 
     public async Task AddHistoryAsync(TestCaseHistory history) { _db.History.Add(history); await _db.SaveChangesAsync(); }
     public Task<List<TestCaseHistory>> GetHistoryAsync(string testCaseId) =>

@@ -88,6 +88,8 @@ public record SuiteResponse(int Id, string Name, string Description, string Kind
 
 public record BulkEditRequest(List<string> Ids, string? Priority, string? Status, List<string>? AddTags, List<string>? RemoveTags, string? HistoryComment);
 public record BulkEditResult(List<string> Updated, List<string> NotFound);
+public record BulkDeleteRequest(List<string> Ids);
+public record BulkDeleteResult(List<string> Deleted, List<string> NotFound, List<string> Forbidden);
 
 public record HistoryDiffEntry(string Field, string? OldValue, string? NewValue);
 

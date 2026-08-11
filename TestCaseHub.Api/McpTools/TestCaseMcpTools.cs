@@ -344,4 +344,62 @@ public class TestCaseMcpTools
         var hist = await _store.GetHistoryAsync(id);
         return hist.Select(h => new HistoryResponse(h.Id, h.TestCaseId, h.ChangedBy, h.ChangedAt, h.ChangeType, h.OldSnapshotJson, h.NewSnapshotJson, h.Comment)).ToList();
     }
+
+    [McpServerTool(Name = "delete_test_case"), Description(
+        "Permanently delete a single test case. Requires Contributor role or above -- same bar as create/update/" +
+        "deprecate. History rows for this id are kept (not deleted) so there's still a record it existed.")]
+    public async Task<object> DeleteTestCase(string id, ClaimsPrincipal user)
+    {
+        if (!user.CanEditTestCases())
+            return new { error = "You do not have permission to delete test cases (Contributor role or above required)." };
+
+        var tc = await _store.GetTestCaseAsync(id);
+        if (tc is null) return new { error = "Not found." };
+        var module = await _store.GetModuleAsync(tc.ModuleId);
+        if (module is null || !user.HasCompanyAccess(module.CompanyId)) return new { error = "Not found." };
+
+        var actorName = DisplayNameOf(user);
+        var snapshot = JsonSerializer.Serialize(TestCaseResponse.From(tc));
+        await _store.AddHistoryAsync(new TestCaseHistory
+        {
+            TestCaseId = tc.Id, ChangedBy = actorName, ChangeType = "Deleted",
+            OldSnapshotJson = snapshot, NewSnapshotJson = snapshot,
+            Comment = "Deleted via MCP"
+        });
+        await _store.DeleteTestCaseAsync(id);
+        return new { ok = true, id, title = tc.Title };
+    }
+
+    [McpServerTool(Name = "bulk_delete_test_cases"), Description(
+        "Permanently delete multiple test cases by ID in one call. Requires Contributor role or above. IDs from " +
+        "a company you don't have access to are reported back separately, not deleted.")]
+    public async Task<object> BulkDeleteTestCases(List<string> ids, ClaimsPrincipal user)
+    {
+        if (!user.CanEditTestCases())
+            return new { error = "You do not have permission to delete test cases (Contributor role or above required)." };
+
+        var deleted = new List<string>();
+        var notFound = new List<string>();
+        var forbidden = new List<string>();
+        var actorName = DisplayNameOf(user);
+
+        foreach (var id in ids ?? new())
+        {
+            var tc = await _store.GetTestCaseAsync(id);
+            if (tc is null) { notFound.Add(id); continue; }
+            var module = await _store.GetModuleAsync(tc.ModuleId);
+            if (module is null || !user.HasCompanyAccess(module.CompanyId)) { forbidden.Add(id); continue; }
+
+            var snapshot = JsonSerializer.Serialize(TestCaseResponse.From(tc));
+            await _store.AddHistoryAsync(new TestCaseHistory
+            {
+                TestCaseId = tc.Id, ChangedBy = actorName, ChangeType = "Deleted",
+                OldSnapshotJson = snapshot, NewSnapshotJson = snapshot,
+                Comment = "Deleted via MCP bulk delete"
+            });
+            await _store.DeleteTestCaseAsync(id);
+            deleted.Add(id);
+        }
+        return new { deleted, notFound, forbidden };
+    }
 }

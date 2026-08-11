@@ -227,6 +227,59 @@ public class TestCasesController : ControllerBase
         return Ok(TestCaseResponse.From(tc));
     }
 
+    [HttpDelete("{id}")]
+    public async Task<ActionResult> Delete(string id)
+    {
+        // Same permission bar as everything else that mutates a test case -- Contributor and
+        // above. History/Comments rows are intentionally left behind (see DeleteTestCaseAsync)
+        // so there's still a record that this test case existed and who deleted it.
+        if (!User.CanEditTestCases()) return Forbid();
+
+        var tc = await _store.GetTestCaseAsync(id);
+        if (tc is null) return NotFound();
+        var module = await _store.GetModuleAsync(tc.ModuleId);
+        if (module is null || !await CanAccessModuleAsync(module)) return Forbid();
+
+        var oldSnapshot = System.Text.Json.JsonSerializer.Serialize(TestCaseResponse.From(tc));
+        await _store.AddHistoryAsync(new TestCaseHistory
+        {
+            TestCaseId = tc.Id, ChangedBy = CurrentUserDisplayName, ChangeType = "Deleted",
+            OldSnapshotJson = oldSnapshot, NewSnapshotJson = oldSnapshot,
+            Comment = "Test case deleted"
+        });
+        await _store.DeleteTestCaseAsync(id);
+        return NoContent();
+    }
+
+    [HttpPost("bulk-delete")]
+    public async Task<ActionResult<BulkDeleteResult>> BulkDelete(BulkDeleteRequest req)
+    {
+        if (!User.CanEditTestCases()) return Forbid();
+
+        var deleted = new List<string>();
+        var notFound = new List<string>();
+        var forbidden = new List<string>();
+
+        foreach (var id in req.Ids ?? new())
+        {
+            var tc = await _store.GetTestCaseAsync(id);
+            if (tc is null) { notFound.Add(id); continue; }
+            var module = await _store.GetModuleAsync(tc.ModuleId);
+            if (module is null || !await CanAccessModuleAsync(module)) { forbidden.Add(id); continue; }
+
+            var oldSnapshot = System.Text.Json.JsonSerializer.Serialize(TestCaseResponse.From(tc));
+            await _store.AddHistoryAsync(new TestCaseHistory
+            {
+                TestCaseId = tc.Id, ChangedBy = CurrentUserDisplayName, ChangeType = "Deleted",
+                OldSnapshotJson = oldSnapshot, NewSnapshotJson = oldSnapshot,
+                Comment = "Deleted via bulk delete"
+            });
+            await _store.DeleteTestCaseAsync(id);
+            deleted.Add(id);
+        }
+        return new BulkDeleteResult(deleted, notFound, forbidden);
+    }
+
     [HttpGet("{id}/history")]
     public async Task<ActionResult<List<HistoryResponse>>> GetHistory(string id)
     {
@@ -299,6 +352,10 @@ public class TestCasesController : ControllerBase
         {
             var tc = await _store.GetTestCaseAsync(id);
             if (tc is null) { notFound.Add(id); continue; }
+            // Fixed cross-tenant gap: this action previously had no company check at all, so a
+            // Contributor could bulk-edit any test case ID from ANY company by guessing it.
+            var owningModule = await _store.GetModuleAsync(tc.ModuleId);
+            if (owningModule is null || !await CanAccessModuleAsync(owningModule)) { notFound.Add(id); continue; }
 
             var oldSnapshot = System.Text.Json.JsonSerializer.Serialize(TestCaseResponse.From(tc));
 
