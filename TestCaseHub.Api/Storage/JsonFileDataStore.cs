@@ -642,6 +642,9 @@ public class JsonFileDataStore : IDataStore
     public Task<List<Team>> GetTeamsAsync(int companyId) =>
         WithLockAsync(async () => _data.Teams.Where(t => t.CompanyId == companyId).OrderBy(t => t.Name).ToList());
 
+    public Task<List<Team>> GetAllTeamsAsync() =>
+        WithLockAsync(async () => _data.Teams.OrderBy(t => t.CompanyId).ThenBy(t => t.Name).ToList());
+
     public Task<Team?> GetTeamAsync(int id) =>
         WithLockAsync(async () => _data.Teams.FirstOrDefault(t => t.Id == id));
 

@@ -90,6 +90,7 @@
   .profile-widget .profile-info{ text-align:right; line-height:1.3; }
   .profile-widget .profile-name{ font-size:13px; font-weight:600; }
   .profile-widget .profile-email{ font-size:11px; opacity:0.85; }
+  .profile-widget .profile-company{ font-size:11px; opacity:0.85; color:#fff; font-weight:600; margin-top:1px; }
   .profile-role{ display:inline-block; background:rgba(255,255,255,0.25); border-radius:8px; padding:1px 7px; font-size:10px; font-weight:600; letter-spacing:0.3px; text-transform:uppercase; vertical-align:middle; }
   .profile-widget button{ background:#fff; color:var(--accent); border-color:#fff; padding:5px 10px; font-size:12px; }
   .toast-container{ position:fixed; top:16px; right:16px; z-index:200; display:flex; flex-direction:column; gap:8px; }
@@ -939,8 +940,8 @@ function render(){
       <div class="profile-widget">
         <div class="profile-info">
           <div class="profile-name">${escapeHtml((AUTH && (AUTH.displayName || AUTH.email)) || '')}${(AUTH && AUTH.role) ? ` <span class="profile-role">${escapeHtml(AUTH.role)}${(AUTH.role==='SuperAdmin' && state.actingCompanyId) ? ' — acting as Admin' : ''}</span>` : ''}</div>
-          <div class="profile-email">${escapeHtml((AUTH && AUTH.email) || '')} <button type="button" id="editMyEmailBtn" class="small ghost" title="Change email" style="padding:1px 6px;font-size:10px;">edit</button></div>
-          ${(AUTH && AUTH.companyName) ? `<div class="profile-company muted" style="font-size:11px;">${escapeHtml(AUTH.companyName)}</div>` : ''}
+          <div class="profile-email">${escapeHtml((AUTH && AUTH.email) || '')}${(AUTH && (AUTH.role === 'Admin' || AUTH.role === 'SuperAdmin')) ? ` <button type="button" id="editMyEmailBtn" class="small ghost" title="Change email" style="padding:1px 6px;font-size:10px;">edit</button>` : ''}</div>
+          ${(AUTH && AUTH.companyName) ? `<div class="profile-company">${escapeHtml(AUTH.companyName)}</div>` : ''}
         </div>
         ${(AUTH && AUTH.role === 'SuperAdmin' && state.actingCompanyId) ? `<button type="button" id="exitCompanyBtn" class="ghost">Exit company</button>` : ''}
         <button type="button" id="logoutBtn">Logout</button>
@@ -1002,7 +1003,7 @@ function renderSuperAdminShell(){
       <div class="profile-widget">
         <div class="profile-info">
           <div class="profile-name">${escapeHtml((AUTH && (AUTH.displayName || AUTH.email)) || '')} <span class="profile-role">SuperAdmin</span></div>
-          <div class="profile-email">${escapeHtml((AUTH && AUTH.email) || '')} <button type="button" id="editMyEmailBtn" class="small ghost" title="Change email" style="padding:1px 6px;font-size:10px;">edit</button></div>
+          <div class="profile-email">${escapeHtml((AUTH && AUTH.email) || '')}${(AUTH && (AUTH.role === 'Admin' || AUTH.role === 'SuperAdmin')) ? ` <button type="button" id="editMyEmailBtn" class="small ghost" title="Change email" style="padding:1px 6px;font-size:10px;">edit</button>` : ''}</div>
         </div>
         <button type="button" id="logoutBtn">Logout</button>
       </div>

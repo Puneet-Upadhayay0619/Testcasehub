@@ -121,6 +121,7 @@ public interface IDataStore
 
     Task<Team> CreateTeamAsync(Team team);
     Task<List<Team>> GetTeamsAsync(int companyId);
+    Task<List<Team>> GetAllTeamsAsync();
     Task<Team?> GetTeamAsync(int id);
     Task<Team> UpdateTeamAsync(Team team);
 

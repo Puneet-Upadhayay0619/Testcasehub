@@ -150,6 +150,7 @@ public class EfCoreDataStore : IDataStore
 
     public async Task<Team> CreateTeamAsync(Team team) { _db.Teams.Add(team); await _db.SaveChangesAsync(); return team; }
     public Task<List<Team>> GetTeamsAsync(int companyId) => _db.Teams.Where(t => t.CompanyId == companyId).OrderBy(t => t.Name).ToListAsync();
+    public Task<List<Team>> GetAllTeamsAsync() => _db.Teams.OrderBy(t => t.CompanyId).ThenBy(t => t.Name).ToListAsync();
     public Task<Team?> GetTeamAsync(int id) => _db.Teams.FirstOrDefaultAsync(t => t.Id == id);
     public async Task<Team> UpdateTeamAsync(Team team) { await _db.SaveChangesAsync(); return team; }
 

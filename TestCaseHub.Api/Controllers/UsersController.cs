@@ -64,9 +64,13 @@ public class UsersController : ControllerBase
     // email string until the user logs in again or their refresh token rotates -- that's fine
     // since email isn't used in any permission check (role/companyId are), only for display and
     // as the login identifier going forward.
+    // Restricted to Admin+ (Admin or SuperAdmin) -- Lead/Contributor/Viewer cannot change even
+    // their own email. This deliberately narrows the original self-service-for-everyone design:
+    // email is the login identifier, and only account managers should be able to repoint it.
     [HttpPut("me/email")]
     public async Task<ActionResult<UserResponse>> ChangeMyEmail(UpdateEmailRequest req)
     {
+        if (!User.CanManageUsers()) return Forbid();
         var myId = ActorUserId;
         if (myId is null) return Unauthorized();
         var me = await _store.GetUserByIdAsync(myId.Value);

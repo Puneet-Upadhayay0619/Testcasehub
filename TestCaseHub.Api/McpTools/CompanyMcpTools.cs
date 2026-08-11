@@ -110,6 +110,16 @@ public class CompanyMcpTools
 
         foreach (var u in matched)
         {
+            // Drop stale team memberships from whatever company the user is LEAVING -- a team
+            // membership only makes sense inside the team's own company.
+            var oldTeamIds = await _store.GetTeamIdsForUserAsync(u.Id);
+            foreach (var teamId in oldTeamIds)
+            {
+                var team = await _store.GetTeamAsync(teamId);
+                if (team is not null && team.CompanyId != companyId)
+                    await _store.RemoveTeamMemberAsync(teamId, u.Id);
+            }
+
             u.CompanyId = companyId;
             await _store.UpdateUserAsync(u);
         }
@@ -283,15 +293,20 @@ public class CompanyMcpTools
     }
 
     [McpServerTool(Name = "update_user_email"), Description(
-        "Change a user's email/login address. Omit userId (or pass your own id) to change your OWN account's " +
-        "email -- that needs no special permission, same as the profile page. To change SOMEONE ELSE's email " +
-        "you need Admin role or above (own company) or SuperAdmin (any company); only a SuperAdmin can change " +
-        "another SuperAdmin's email.")]
+        "Change a user's email/login address. Requires Admin role or above -- Lead/Contributor/Viewer cannot " +
+        "use this even on their own account. Admin can change email for users in their own company (including " +
+        "themselves); SuperAdmin can change anyone's email in any company. Only a SuperAdmin can change another " +
+        "SuperAdmin's email. Omit userId to target your own account.")]
     public async Task<object> UpdateUserEmail(ClaimsPrincipal user, [Description("New email address")] string newEmail, [Description("Target user id; omit to change your own account")] int? userId = null)
     {
         var myIdStr = user.FindFirstValue(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Sub);
         var myId = int.TryParse(myIdStr, out var parsed) ? parsed : (int?)null;
         if (myId is null) return new { error = "Could not identify the calling user." };
+
+        // Restricted to Admin+ -- Lead/Contributor/Viewer cannot change even their own email,
+        // matching the REST PUT /api/users/me/email endpoint's rule.
+        if (!user.CanManageUsers())
+            return new { error = "You do not have permission to change email (Admin role or above required)." };
 
         var targetId = userId ?? myId.Value;
         Models.User? target;
@@ -302,8 +317,6 @@ public class CompanyMcpTools
         else
         {
             // Same rule as the REST PUT /api/users/{id}/email endpoint.
-            if (!user.CanManageUsers())
-                return new { error = "You do not have permission to change other users' email (Admin role or above required)." };
             target = await _store.GetUserByIdAsync(targetId);
             if (target is not null)
             {
@@ -363,5 +376,54 @@ public class CompanyMcpTools
         });
 
         return CompanyResponse.From(company);
+    }
+
+    [McpServerTool(Name = "cleanup_stale_team_links"), Description(
+        "SuperAdmin only. Scans every team across every company and removes any member or module link that no " +
+        "longer makes sense -- e.g. a user who was moved to a different company via assign_users_by_domain but " +
+        "was never dropped from their old company's team, or a module that got moved via move_module_to_company " +
+        "before that tool cleaned up team links itself. Safe to run any time; a no-op if nothing is stale.")]
+    public async Task<object> CleanupStaleTeamLinks(ClaimsPrincipal user)
+    {
+        if (!user.CanManageCompanies())
+            return new { error = "You do not have permission to manage companies (SuperAdmin only)." };
+
+        var teams = await _store.GetAllTeamsAsync();
+        var staleMembers = new List<object>();
+        var staleModules = new List<object>();
+
+        foreach (var team in teams)
+        {
+            foreach (var member in await _store.GetTeamMembersAsync(team.Id))
+            {
+                if (member.CompanyId != team.CompanyId)
+                {
+                    await _store.RemoveTeamMemberAsync(team.Id, member.Id);
+                    staleMembers.Add(new { teamId = team.Id, teamName = team.Name, userId = member.Id, userEmail = member.Email });
+                }
+            }
+
+            foreach (var moduleId in await _store.GetModuleIdsForTeamAsync(team.Id))
+            {
+                var module = await _store.GetModuleAsync(moduleId);
+                if (module is not null && module.CompanyId != team.CompanyId)
+                {
+                    await _store.RemoveTeamModuleAsync(team.Id, moduleId);
+                    staleModules.Add(new { teamId = team.Id, teamName = team.Name, moduleId, moduleName = module.Name });
+                }
+            }
+        }
+
+        if (staleMembers.Count > 0 || staleModules.Count > 0)
+        {
+            await _store.AddAuditLogAsync(new AuditLog
+            {
+                CompanyId = null, ActorEmail = EmailOf(user), ActorDisplayName = EmailOf(user), Action = "StaleTeamLinksCleanedUp",
+                TargetDescription = $"{staleMembers.Count} member(s), {staleModules.Count} module(s)",
+                DetailsJson = System.Text.Json.JsonSerializer.Serialize(new { staleMembers, staleModules, via = "mcp" })
+            });
+        }
+
+        return new { ok = true, staleMembersRemoved = staleMembers.Count, staleModulesRemoved = staleModules.Count, staleMembers, staleModules };
     }
 }

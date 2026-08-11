@@ -157,6 +157,18 @@ public class CompaniesController : ControllerBase
 
         foreach (var u in matched)
         {
+            // A user's OLD-company team memberships make no sense once they belong to a
+            // different company -- "Default Team" (Default Company) showing 5 members when
+            // Default Company has 0 users was exactly this bug: the user's CompanyId moved but
+            // nobody dropped them from teams that still belong to the company they left.
+            var oldTeamIds = await _store.GetTeamIdsForUserAsync(u.Id);
+            foreach (var teamId in oldTeamIds)
+            {
+                var team = await _store.GetTeamAsync(teamId);
+                if (team is not null && team.CompanyId != id)
+                    await _store.RemoveTeamMemberAsync(teamId, u.Id);
+            }
+
             u.CompanyId = id;
             await _store.UpdateUserAsync(u);
         }
@@ -170,5 +182,52 @@ public class CompaniesController : ControllerBase
         });
 
         return new AssignUsersByDomainResult(matched.Count, matched.Select(u => u.Email).ToList());
+    }
+
+    // One-off/repeatable fixer: removes any team member or team-module link that no longer
+    // matches its team's company (e.g. a user moved companies via assign-users-by-domain before
+    // that cleanup was added, or any other drift). Safe to run repeatedly -- a no-op once clean.
+    [HttpPost("cleanup-stale-team-links")]
+    public async Task<ActionResult> CleanupStaleTeamLinks()
+    {
+        if (!User.CanManageCompanies()) return Forbid();
+
+        var teams = await _store.GetAllTeamsAsync();
+        var staleMembers = new List<object>();
+        var staleModules = new List<object>();
+
+        foreach (var team in teams)
+        {
+            foreach (var member in await _store.GetTeamMembersAsync(team.Id))
+            {
+                if (member.CompanyId != team.CompanyId)
+                {
+                    await _store.RemoveTeamMemberAsync(team.Id, member.Id);
+                    staleMembers.Add(new { teamId = team.Id, teamName = team.Name, userId = member.Id, userEmail = member.Email });
+                }
+            }
+
+            foreach (var moduleId in await _store.GetModuleIdsForTeamAsync(team.Id))
+            {
+                var module = await _store.GetModuleAsync(moduleId);
+                if (module is not null && module.CompanyId != team.CompanyId)
+                {
+                    await _store.RemoveTeamModuleAsync(team.Id, moduleId);
+                    staleModules.Add(new { teamId = team.Id, teamName = team.Name, moduleId, moduleName = module.Name });
+                }
+            }
+        }
+
+        if (staleMembers.Count > 0 || staleModules.Count > 0)
+        {
+            await _store.AddAuditLogAsync(new AuditLog
+            {
+                CompanyId = null, ActorEmail = ActorEmail, ActorDisplayName = ActorEmail, Action = "StaleTeamLinksCleanedUp",
+                TargetDescription = $"{staleMembers.Count} member(s), {staleModules.Count} module(s)",
+                DetailsJson = System.Text.Json.JsonSerializer.Serialize(new { staleMembers, staleModules })
+            });
+        }
+
+        return Ok(new { ok = true, staleMembersRemoved = staleMembers.Count, staleModulesRemoved = staleModules.Count, staleMembers, staleModules });
     }
 }
