@@ -1172,7 +1172,7 @@ function renderManageAdmins(){
   const companyName = (id) => { const c = companies.find(x => x.id === id); return c ? c.name : ('#' + id); };
   const selectedCompanyId = state.manageAdminsCompanyId || (companies[0] && companies[0].id) || null;
 
-  const rows = (DATA.adminInvites || []).slice().sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt)).map(i => `
+  const rows = (DATA.adminInvites || []).filter(i => i.companyId === selectedCompanyId).slice().sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt)).map(i => `
     <tr>
       <td>${escapeHtml(companyName(i.companyId))}</td>
       <td><code>${escapeHtml(i.code)}</code> <button type="button" class="small ghost" data-copy-admin-invite="${escapeHtml(i.code)}">Copy</button></td>
