@@ -122,6 +122,17 @@ public class CompaniesController : ControllerBase
         return (await _store.GetCompanyAdminInvitesAsync(id)).Select(CompanyAdminInviteResponse.From).ToList();
     }
 
+    // Cross-company view for the SuperAdmin "Manage Admins" page -- every admin referral code
+    // ever generated, across every company, so a code isn't lost the moment its creation toast
+    // disappears. Route is a literal "admin-invites" segment (no id), so it doesn't collide with
+    // {id:int}/admin-invites above or admin-invites/{inviteId:int}/revoke below.
+    [HttpGet("admin-invites")]
+    public async Task<ActionResult<List<CompanyAdminInviteResponse>>> GetAllAdminInvites()
+    {
+        if (!User.CanManageCompanies()) return Forbid();
+        return (await _store.GetCompanyAdminInvitesAsync(null)).Select(CompanyAdminInviteResponse.From).ToList();
+    }
+
     [HttpPost("admin-invites/{inviteId:int}/revoke")]
     public async Task<ActionResult<CompanyAdminInviteResponse>> RevokeAdminInvite(int inviteId)
     {

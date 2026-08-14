@@ -518,6 +518,11 @@ let state = {
   companiesLoading: false,
   showCreateCompanyForm: false,
   companyInviteBusyId: null,
+  // SuperAdmin "Manage Admins" page -- persistent list of every admin referral code ever
+  // generated, across all companies (previously only shown once as a toast).
+  showManageAdmins: false,
+  adminInvitesLoading: false,
+  manageAdminsCompanyId: null,
   // Which company a SuperAdmin has "entered" to act as its Admin -- null means "not acting,
   // showing the Companies list". Set by clicking "Enter company", cleared by "Exit company".
   actingCompanyId: null,
@@ -889,6 +894,7 @@ async function bootstrap(){
     state.loginError = null;
     render();
     loadCompanies();
+    loadAdminInvites();
     return;
   }
   try{
@@ -1015,7 +1021,11 @@ function renderSuperAdminShell(){
     </div>
     <p class="sub">You manage companies at the platform level here — create a company, then issue its first Admin a referral code to register with. Day-to-day test case work happens inside each company's own Admin/Lead/Contributor/Viewer accounts, not here.</p>
     <div class="main" style="max-width:900px;">
-      ${renderCompaniesPage()}
+      <div class="actions-row" style="margin-bottom:12px;">
+        <button type="button" class="${!state.showManageAdmins ? '' : 'secondary'}" id="tabCompanies">Companies</button>
+        <button type="button" class="${state.showManageAdmins ? '' : 'secondary'}" id="tabManageAdmins">Manage Admins</button>
+      </div>
+      ${state.showManageAdmins ? renderManageAdmins() : renderCompaniesPage()}
     </div>
   `;
 }
@@ -1045,6 +1055,7 @@ async function createCompanyAdminInvite(companyId){
     const invite = await apiFetch('/api/companies/' + companyId + '/admin-invites', {
       method:'POST', body: JSON.stringify({ companyId, maxUses: 1, expiresInDays: 14 })
     });
+    DATA.adminInvites = [invite].concat(DATA.adminInvites || []);
     state.companyInviteBusyId = null;
     render();
     if(navigator.clipboard && navigator.clipboard.writeText){
@@ -1128,6 +1139,69 @@ function renderCompaniesPage(){
       <table style="margin-top:14px;">
         <thead><tr><th>Company</th><th>Status</th><th>Created</th><th></th></tr></thead>
         <tbody>${rows || '<tr><td colspan="4" class="empty">No companies yet — create the first one above.</td></tr>'}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+// ---------- SuperAdmin: Manage Admins (persistent referral-code registry) ----------
+
+async function loadAdminInvites(){
+  state.adminInvitesLoading = true; render();
+  try{ DATA.adminInvites = await apiFetch('/api/companies/admin-invites'); }
+  catch(err){ showToast('Could not load admin referral codes: ' + err.message, 'error'); }
+  state.adminInvitesLoading = false; render();
+}
+
+async function revokeAdminInvite(id){
+  try{
+    const updated = await apiFetch('/api/companies/admin-invites/' + id + '/revoke', { method:'POST' });
+    DATA.adminInvites = (DATA.adminInvites || []).map(i => i.id === id ? updated : i);
+    render();
+    showToast('Admin referral code revoked.', 'success');
+  } catch(err){
+    showToast('Could not revoke referral code: ' + err.message, 'error');
+  }
+}
+
+function renderManageAdmins(){
+  if(state.adminInvitesLoading){
+    return `<div class="panel"><h3>Manage Admins</h3><p class="sub" style="margin-top:-6px;">Loading…</p></div>`;
+  }
+  const companies = DATA.companies || [];
+  const companyName = (id) => { const c = companies.find(x => x.id === id); return c ? c.name : ('#' + id); };
+  const selectedCompanyId = state.manageAdminsCompanyId || (companies[0] && companies[0].id) || null;
+
+  const rows = (DATA.adminInvites || []).slice().sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt)).map(i => `
+    <tr>
+      <td>${escapeHtml(companyName(i.companyId))}</td>
+      <td><code>${escapeHtml(i.code)}</code> <button type="button" class="small ghost" data-copy-admin-invite="${escapeHtml(i.code)}">Copy</button></td>
+      <td>${i.usedCount} / ${i.maxUses}</td>
+      <td>${fmtDate(i.expiresAt)}</td>
+      <td>${i.revoked ? '<span class="badge b-deprecated">Revoked</span>' : (i.isUsable ? '<span class="badge b-active">Usable</span>' : '<span class="badge b-draft">Used up / expired</span>')}</td>
+      <td>${escapeHtml(i.createdByEmail)}</td>
+      <td>${i.isUsable ? `<button type="button" class="small ghost" data-revoke-admin-invite="${i.id}">Revoke</button>` : ''}</td>
+    </tr>
+  `).join('');
+
+  return `
+    <div class="panel">
+      <h3>Manage Admins</h3>
+      <p class="sub" style="margin-top:-6px;">Every Admin referral code ever generated, across every company — so a code isn't lost once its creation toast disappears. Pick a company and generate a new one, or copy/revoke an existing one below.</p>
+      <div class="grid2">
+        <div class="field">
+          <label>Company</label>
+          <select id="manageAdminsCompanySelect">
+            ${companies.map(c => `<option value="${c.id}" ${c.id === selectedCompanyId ? 'selected' : ''}>${escapeHtml(c.name)}</option>`).join('') || '<option value="">No companies yet</option>'}
+          </select>
+        </div>
+      </div>
+      <div class="actions-row">
+        <button type="button" id="generateAdminInviteBtn" ${!selectedCompanyId || state.companyInviteBusyId===selectedCompanyId ? 'disabled' : ''}>${state.companyInviteBusyId===selectedCompanyId ? 'Creating…' : 'Generate Admin referral code'}</button>
+      </div>
+      <table style="margin-top:14px;">
+        <thead><tr><th>Company</th><th>Code</th><th>Uses</th><th>Expires</th><th>Status</th><th>Created by</th><th></th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="7" class="empty">No admin referral codes generated yet.</td></tr>'}</tbody>
       </table>
     </div>
   `;
@@ -2788,6 +2862,33 @@ function wireEvents(){
   });
   document.querySelectorAll('[data-invite-company]').forEach(el => el.addEventListener('click', () => {
     createCompanyAdminInvite(Number(el.dataset.inviteCompany));
+  }));
+  const tabCompanies = document.getElementById('tabCompanies');
+  if(tabCompanies) tabCompanies.addEventListener('click', () => { state.showManageAdmins = false; render(); });
+  const tabManageAdmins = document.getElementById('tabManageAdmins');
+  if(tabManageAdmins) tabManageAdmins.addEventListener('click', () => { state.showManageAdmins = true; render(); });
+  const manageAdminsCompanySelect = document.getElementById('manageAdminsCompanySelect');
+  if(manageAdminsCompanySelect) manageAdminsCompanySelect.addEventListener('change', () => {
+    state.manageAdminsCompanyId = Number(manageAdminsCompanySelect.value);
+    render();
+  });
+  const generateAdminInviteBtn = document.getElementById('generateAdminInviteBtn');
+  if(generateAdminInviteBtn) generateAdminInviteBtn.addEventListener('click', () => {
+    const companyId = state.manageAdminsCompanyId || (DATA.companies && DATA.companies[0] && DATA.companies[0].id);
+    if(!companyId){ showToast('No company selected.', 'error'); return; }
+    createCompanyAdminInvite(companyId);
+  });
+  document.querySelectorAll('[data-copy-admin-invite]').forEach(el => el.addEventListener('click', () => {
+    const code = el.dataset.copyAdminInvite;
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(code).then(() => showToast('Copied: ' + code, 'success')).catch(() => showToast('Code: ' + code, 'success'));
+    } else {
+      showToast('Code: ' + code, 'success');
+    }
+  }));
+  document.querySelectorAll('[data-revoke-admin-invite]').forEach(el => el.addEventListener('click', () => {
+    if(!confirm('Revoke this admin referral code? It can no longer be used to register.')) return;
+    revokeAdminInvite(Number(el.dataset.revokeAdminInvite));
   }));
   document.querySelectorAll('[data-suspend-company]').forEach(el => el.addEventListener('click', () => {
     const id = Number(el.dataset.suspendCompany);

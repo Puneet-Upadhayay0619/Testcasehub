@@ -72,6 +72,15 @@ public class CompanyMcpTools
         return CompanyAdminInviteResponse.From(invite);
     }
 
+    [McpServerTool(Name = "list_all_admin_invites"), Description("SuperAdmin only. Lists every admin referral code ever generated, across all companies -- the persistent record behind the 'Manage Admins' page, since a one-time creation toast is easy to lose.")]
+    public async Task<object> ListAllAdminInvites(ClaimsPrincipal user)
+    {
+        if (!user.CanManageCompanies())
+            return new { error = "You do not have permission to manage companies (SuperAdmin only)." };
+        var invites = await _store.GetCompanyAdminInvitesAsync(null);
+        return invites.Select(CompanyAdminInviteResponse.From).ToList();
+    }
+
     [McpServerTool(Name = "list_users_in_company"), Description("Admin (own company) or SuperAdmin (any company, must pass companyId). Lists every user in that company with their role.")]
     public async Task<object> ListUsersInCompany(ClaimsPrincipal user, int? companyId = null)
     {
