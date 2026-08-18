@@ -196,12 +196,15 @@ async function apiFetch(path, options, _isRetryAfterRefresh){
   if(AUTH && AUTH.role === 'SuperAdmin' && state.actingCompanyId){
     path += (path.includes('?') ? '&' : '?') + 'companyId=' + state.actingCompanyId;
   }
-  // Lead/Contributor/Viewer see ONE team's modules at a time (default: their first-joined
-  // team), not a union of every team they're in -- see ModulesController.GetAll. Centralized
-  // here so every call site fetching /api/modules gets this automatically.
+  // Lead/Contributor/Viewer, AND Admin (if they're personally in a team), see ONE team's
+  // modules at a time (default: their first-joined team), not a union of every team they're
+  // in -- see ModulesController.GetAll. SuperAdmin is never scoped (no personal team
+  // membership of their own). state.activeTeamId === 0 means "Admin explicitly chose All
+  // modules" -- must use a strict null check here, not `||`, since 0 is falsy in JS and would
+  // otherwise silently fall back to the first team instead of honoring "All".
   if(path.indexOf('/api/modules') === 0 && AUTH){
-    const effectiveTeamId = state.activeTeamId || (AUTH.teamIds && AUTH.teamIds[0]);
-    if(effectiveTeamId) path += (path.includes('?') ? '&' : '?') + 'teamId=' + effectiveTeamId;
+    const effectiveTeamId = (state.activeTeamId !== null && state.activeTeamId !== undefined) ? state.activeTeamId : (AUTH.teamIds && AUTH.teamIds[0]);
+    if(effectiveTeamId !== undefined && effectiveTeamId !== null) path += (path.includes('?') ? '&' : '?') + 'teamId=' + effectiveTeamId;
   }
   let res;
   try{
@@ -2563,15 +2566,27 @@ function renderModuleMaster(){
     </tr>
   `).join('') : `<tr><td colspan="4" class="empty">No modules match your search.</td></tr>`;
 
+  const isMgmtRole = AUTH.role === 'Admin' || AUTH.role === 'SuperAdmin';
+  // Admin/SuperAdmin aren't restricted to their own team memberships -- their dropdown lists
+  // EVERY team in the company (a browsing/filter view, not an access control), plus an "All
+  // modules" option since they're never actually restricted. Lead/Contributor/Viewer only ever
+  // see their OWN teams in the dropdown (and never get "All"), matching what the backend
+  // actually allows them to request.
   const myTeams = (AUTH.teamIds || []).map(id => (DATA.teams || []).find(t => t.id === id)).filter(Boolean);
-  const showTeamSwitcher = AUTH.role !== 'Admin' && AUTH.role !== 'SuperAdmin' && (AUTH.teamIds || []).length > 1;
-  const effectiveTeamId = state.activeTeamId || (AUTH.teamIds && AUTH.teamIds[0]);
+  const teamOptions = isMgmtRole ? (DATA.teams || []) : myTeams;
+  // Viewer/Contributor/Lead: only worth showing a switcher once they have >1 team (with 1
+  // team there's nothing to switch between). Admin/SuperAdmin: worth showing as soon as the
+  // company has any team at all, because their real choice is "that team" vs "All modules".
+  const showTeamSwitcher = isMgmtRole ? teamOptions.length >= 1 : teamOptions.length > 1;
+  const effectiveTeamId = (state.activeTeamId !== null && state.activeTeamId !== undefined) ? state.activeTeamId : (AUTH.teamIds && AUTH.teamIds[0]);
+  const isAllSelected = isMgmtRole && (effectiveTeamId === 0 || effectiveTeamId === undefined || effectiveTeamId === null);
   const teamSwitcherHtml = !showTeamSwitcher ? '' : (
-    state.myTeamsLoading ? `<p class="sub" style="margin-top:-4px;">Loading your teams…</p>` :
+    state.myTeamsLoading ? `<p class="sub" style="margin-top:-4px;">Loading teams…</p>` :
     `<div class="field" style="max-width:260px;margin-bottom:10px;">
       <label>Viewing modules for team</label>
       <select id="moduleMasterTeamSelect">
-        ${myTeams.map(t => `<option value="${t.id}" ${t.id === effectiveTeamId ? 'selected' : ''}>${escapeHtml(t.name)}</option>`).join('') || `<option value="">Loading…</option>`}
+        ${isMgmtRole ? `<option value="0" ${isAllSelected ? 'selected' : ''}>All modules</option>` : ''}
+        ${teamOptions.map(t => `<option value="${t.id}" ${t.id === effectiveTeamId ? 'selected' : ''}>${escapeHtml(t.name)}</option>`).join('') || (isMgmtRole ? '' : `<option value="">Loading…</option>`)}
       </select>
     </div>`
   );
@@ -2579,7 +2594,7 @@ function renderModuleMaster(){
   return `
     <div class="panel">
       <h3>Module Master</h3>
-      <p class="sub" style="margin-top:-6px;">${showTeamSwitcher ? 'Modules for the team selected below — switch teams to see another.' : 'All modules — click a row to open its test cases.'}</p>
+      <p class="sub" style="margin-top:-6px;">${showTeamSwitcher ? 'Modules for the team selected below — switch teams (or pick All) to see another view.' : 'All modules — click a row to open its test cases.'}</p>
       ${teamSwitcherHtml}
       <div class="toolbar">
         <input type="search" id="moduleMasterSearchBox" placeholder="Search module by name or code" value="${escapeHtml(state.moduleMasterSearch)}" style="min-width:220px;">
@@ -3070,7 +3085,13 @@ function wireEvents(){
     const next = !state.showModuleMaster;
     closeAllPanels();
     state.showModuleMaster = next;
-    if(next && AUTH && AUTH.role !== 'Admin' && AUTH.role !== 'SuperAdmin' && (AUTH.teamIds || []).length > 1 && !DATA.teams.length){
+    // Admin/SuperAdmin: we don't know how many teams the company has without fetching, so
+    // always load once (cheap, guarded by the length check so it only happens on first open).
+    // Viewer/Contributor/Lead: only worth fetching team names if they're in >1 of their OWN
+    // teams (that count is already known from AUTH.teamIds, no fetch needed to decide).
+    const isMgmtRoleForTeams = AUTH && (AUTH.role === 'Admin' || AUTH.role === 'SuperAdmin');
+    const needsMyTeams = isMgmtRoleForTeams || (AUTH && (AUTH.teamIds || []).length > 1);
+    if(next && needsMyTeams && !DATA.teams.length){
       loadMyTeams();
     }
     render();
