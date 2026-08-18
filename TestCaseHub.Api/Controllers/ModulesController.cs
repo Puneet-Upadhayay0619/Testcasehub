@@ -37,14 +37,57 @@ public class ModulesController : ControllerBase
 
         var modules = (await _store.GetModulesAsync()).Where(m => m.CompanyId == effectiveCompanyId).ToList();
 
-        // Team-based module visibility (Phase 8): Admin/SuperAdmin see every module in the
-        // company. Lead/Contributor/Viewer are scoped to exactly ONE team at a time -- by
-        // default their first (earliest-joined) team, or whichever team they explicitly pass
-        // via ?teamId= (only honored if it's actually one of their teams) -- rather than a
-        // combined union of every team they belong to, so someone in 3 teams sees one team's
-        // modules at a time with a clear way to switch, instead of all 3 teams' modules mixed
-        // together with no indication of which is which.
-        if (!User.IsAtLeast(Roles.Admin))
+        // Team-based module visibility (Phase 8). Two very different rules depending on role:
+        //
+        // Admin/SuperAdmin: NOT restricted to their own team memberships at all -- they can
+        // browse modules by ANY team in the company via ?teamId= (a management/browsing view,
+        // not an access restriction), or see everything via ?teamId=0 / omitting it entirely.
+        // Admin additionally defaults to their own first-joined team when no teamId is given
+        // AND they happen to personally be on one (matches what's normally most relevant to
+        // them); SuperAdmin has no personal team membership, so their default with no teamId
+        // is always "every module" -- there's nothing to default to.
+        //
+        // Lead/Contributor/Viewer: ALWAYS restricted to exactly ONE of THEIR OWN teams at a
+        // time -- default their first (earliest-joined) team, or whichever of their OWN teams
+        // they explicitly pass via ?teamId= -- never a union of every team they're in, and
+        // never allowed to browse a team they don't belong to or see "everything".
+        if (User.IsAtLeast(Roles.Admin))
+        {
+            if (teamId.HasValue && teamId != 0)
+            {
+                var companyTeams = await _store.GetTeamsAsync(effectiveCompanyId);
+                if (companyTeams.Any(t => t.Id == teamId.Value))
+                {
+                    var visible = new List<Module>();
+                    foreach (var m in modules)
+                    {
+                        var moduleTeamIds = await _store.GetTeamIdsForModuleAsync(m.Id);
+                        if (moduleTeamIds.Contains(teamId.Value)) visible.Add(m);
+                    }
+                    modules = visible;
+                }
+                // else: teamId doesn't belong to this company -- ignore it, fall through to
+                // the full list rather than erroring.
+            }
+            else if (!teamId.HasValue && !User.IsSuperAdmin())
+            {
+                var myTeamIds = User.GetTeamIds();
+                if (myTeamIds.Count > 0)
+                {
+                    var scopeTeamId = myTeamIds[0];
+                    var visible = new List<Module>();
+                    foreach (var m in modules)
+                    {
+                        var moduleTeamIds = await _store.GetTeamIdsForModuleAsync(m.Id);
+                        if (moduleTeamIds.Contains(scopeTeamId)) visible.Add(m);
+                    }
+                    modules = visible;
+                }
+            }
+            // teamId == 0, or SuperAdmin with no teamId at all -> leave `modules` as the full
+            // company list ("All modules").
+        }
+        else
         {
             var myTeamIds = User.GetTeamIds();
             int? scopeTeamId = (teamId.HasValue && myTeamIds.Contains(teamId.Value))
