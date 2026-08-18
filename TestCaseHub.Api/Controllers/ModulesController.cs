@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using TestCaseHub.Api.Dtos;
@@ -14,6 +15,9 @@ public class ModulesController : ControllerBase
 {
     private readonly IDataStore _store;
     public ModulesController(IDataStore store) => _store = store;
+
+    private string ActorEmail => User.FindFirstValue(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Email) ?? "";
+    private string ActorDisplayName => User.FindFirstValue("displayName") ?? ActorEmail;
 
     // Phase 8: SuperAdmin has no company of their own, so they must say which company's
     // modules they want to look at (companyId query param) — "company-wise, never mixed", per
@@ -170,5 +174,35 @@ public class ModulesController : ControllerBase
 
         var links = await _store.GetTaskLinksAsync(moduleId);
         return links.Select(l => new TaskLinkResponse(l.Id, l.ModuleId, l.Layer, l.AdoProject, l.AdoTaskId, l.AdoTaskTitle, l.AdoTaskUrl, l.LinkedAt)).ToList();
+    }
+
+    // Admin and above only (see Permissions.CanDeleteModule) -- this takes every one of the
+    // module's test cases with it, permanently, so it sits well above the Contributor bar used
+    // for editing/creating test cases and modules. Logged to the audit trail since "an entire
+    // module and N test cases just vanished" is exactly the kind of thing a company's Admin
+    // should be able to look back and explain later.
+    [HttpDelete("{moduleId:int}")]
+    public async Task<ActionResult> Delete(int moduleId)
+    {
+        if (!User.CanDeleteModule()) return Forbid();
+
+        var module = await _store.GetModuleAsync(moduleId);
+        if (module is null) return NotFound("Module not found.");
+        if (!User.HasCompanyAccess(module.CompanyId)) return Forbid();
+
+        // GetTestCaseCountsByModuleAsync deliberately excludes Deprecated test cases (it backs
+        // the "active count" badge in the UI) -- the audit log should reflect the TRUE number
+        // of test cases about to be permanently deleted, deprecated ones included.
+        var testCaseCount = (await _store.GetTestCasesAsync(new TestCaseFilter(moduleId, null, null, null, null, null))).Count;
+
+        await _store.AddAuditLogAsync(new AuditLog
+        {
+            CompanyId = module.CompanyId, ActorEmail = ActorEmail, ActorDisplayName = ActorDisplayName,
+            Action = "ModuleDeleted", TargetDescription = $"{module.Name} ({module.Code})",
+            DetailsJson = System.Text.Json.JsonSerializer.Serialize(new { module.Id, module.Name, module.Code, testCaseCount })
+        });
+
+        await _store.DeleteModuleAsync(moduleId);
+        return NoContent();
     }
 }

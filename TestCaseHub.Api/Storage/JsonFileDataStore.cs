@@ -199,6 +199,17 @@ public class JsonFileDataStore : IDataStore
             return module;
         });
 
+    public Task DeleteModuleAsync(int moduleId) =>
+        WithLockAsync(async () =>
+        {
+            if (!_data.Modules.Any(m => m.Id == moduleId)) return;
+            _data.TestCases.RemoveAll(t => t.ModuleId == moduleId);
+            _data.TaskLinks.RemoveAll(l => l.ModuleId == moduleId);
+            _data.TeamModules.RemoveAll(tm => tm.ModuleId == moduleId);
+            _data.Modules.RemoveAll(m => m.Id == moduleId);
+            await PersistAsync();
+        });
+
     public Task<Dictionary<int, int>> GetTestCaseCountsByModuleAsync() =>
         WithLockAsync(async () => _data.TestCases
             .Where(t => t.Status != "Deprecated")

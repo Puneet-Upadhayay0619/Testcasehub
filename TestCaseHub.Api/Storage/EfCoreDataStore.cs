@@ -22,6 +22,18 @@ public class EfCoreDataStore : IDataStore
     public async Task<Module> CreateModuleAsync(Module module) { _db.Modules.Add(module); await _db.SaveChangesAsync(); return module; }
     public async Task<Module> UpdateModuleAsync(Module module) { await _db.SaveChangesAsync(); return module; }
 
+    public async Task DeleteModuleAsync(int moduleId)
+    {
+        var module = await _db.Modules.FindAsync(moduleId);
+        if (module is null) return;
+
+        _db.TestCases.RemoveRange(_db.TestCases.Where(t => t.ModuleId == moduleId));
+        _db.TaskLinks.RemoveRange(_db.TaskLinks.Where(l => l.ModuleId == moduleId));
+        _db.TeamModules.RemoveRange(_db.TeamModules.Where(tm => tm.ModuleId == moduleId));
+        _db.Modules.Remove(module);
+        await _db.SaveChangesAsync();
+    }
+
     public Task<Dictionary<int, int>> GetTestCaseCountsByModuleAsync() =>
         _db.TestCases.Where(t => t.Status != "Deprecated").GroupBy(t => t.ModuleId)
             .Select(g => new { g.Key, Count = g.Count() }).ToDictionaryAsync(g => g.Key, g => g.Count);

@@ -20,6 +20,13 @@ public interface IDataStore
     Task<bool> ModuleCodeExistsAsync(int companyId, string code);
     Task<Module> CreateModuleAsync(Module module);
     Task<Module> UpdateModuleAsync(Module module); // narrow use: Phase 8 company backfill only -- modules have no general edit UI
+    // Permanently deletes a module AND everything that only makes sense in the context of that
+    // module: its test cases, its task links, and its team-module assignment links. History/
+    // Comment/TestRunResult rows for those test cases are deliberately left in place (same
+    // audit-trail tradeoff as DeleteTestCaseAsync -- no formal FK to violate, and it preserves
+    // "this existed, here's its full history" even after the module itself is gone). No-op if
+    // the module doesn't exist.
+    Task DeleteModuleAsync(int moduleId);
     Task<Dictionary<int, int>> GetTestCaseCountsByModuleAsync();
 
     Task<TaskLink> CreateTaskLinkAsync(TaskLink link);

@@ -402,4 +402,30 @@ public class TestCaseMcpTools
         }
         return new { deleted, notFound, forbidden };
     }
+
+    [McpServerTool(Name = "delete_module"), Description(
+        "Permanently delete a module AND every one of its test cases, task links, and team assignments. " +
+        "Requires Admin role or above -- same bar as the REST DELETE /api/modules/{id} endpoint -- since this " +
+        "is a much bigger blast radius than deleting a single test case. Cannot be undone.")]
+    public async Task<object> DeleteModule(int moduleId, ClaimsPrincipal user)
+    {
+        if (!user.CanDeleteModule())
+            return new { error = "You do not have permission to delete modules (Admin role or above required)." };
+
+        var module = await _store.GetModuleAsync(moduleId);
+        if (module is null) return new { error = "Module not found." };
+        if (!user.HasCompanyAccess(module.CompanyId)) return new { error = "Module not found." };
+
+        var testCaseCount = (await _store.GetTestCasesAsync(new TestCaseFilter(moduleId, null, null, null, null, null))).Count;
+
+        await _store.AddAuditLogAsync(new AuditLog
+        {
+            CompanyId = module.CompanyId, ActorEmail = DisplayNameOf(user), ActorDisplayName = DisplayNameOf(user),
+            Action = "ModuleDeleted", TargetDescription = $"{module.Name} ({module.Code})",
+            DetailsJson = JsonSerializer.Serialize(new { module.Id, module.Name, module.Code, testCaseCount, via = "mcp" })
+        });
+
+        await _store.DeleteModuleAsync(moduleId);
+        return new { ok = true, moduleId, name = module.Name, code = module.Code, testCasesDeleted = testCaseCount };
+    }
 }

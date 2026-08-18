@@ -2548,6 +2548,25 @@ async function switchActiveTeam(teamId){
   catch(err){ showToast('Could not load modules for that team: ' + err.message, 'error'); }
 }
 
+// Admin/SuperAdmin only (see Permissions.CanDeleteModule) -- permanently removes the module
+// AND every one of its test cases, task links, and team assignments. Irreversible, so the
+// confirm() below spells out exactly how many test cases go with it before anything happens.
+async function deleteModuleAction(id, name, tcCount){
+  const warning = tcCount > 0
+    ? `Delete "${name}" and all ${tcCount} of its test case(s)? This cannot be undone.`
+    : `Delete "${name}"? This cannot be undone.`;
+  if(!confirm(warning)) return;
+  try{
+    await apiFetch('/api/modules/' + id, { method: 'DELETE' });
+    DATA.modules = (DATA.modules || []).filter(m => m.id !== id);
+    if(state.moduleFilter === id) state.moduleFilter = 'all';
+    render();
+    showToast('Module deleted: ' + name, 'success');
+  } catch(err){
+    showToast('Could not delete module: ' + err.message, 'error');
+  }
+}
+
 const MODULE_MASTER_PAGE_SIZE = 10;
 function renderModuleMaster(){
   const q = state.moduleMasterSearch.trim().toLowerCase();
@@ -2557,16 +2576,16 @@ function renderModuleMaster(){
   const start = (page - 1) * MODULE_MASTER_PAGE_SIZE;
   const pageItems = filtered.slice(start, start + MODULE_MASTER_PAGE_SIZE);
 
+  const isMgmtRole = AUTH.role === 'Admin' || AUTH.role === 'SuperAdmin';
   const rows = pageItems.length ? pageItems.map(m => `
     <tr class="module-master-row" data-mod="${m.id}" style="cursor:pointer;">
       <td>${iconForModule(m)} ${escapeHtml(m.name)}</td>
       <td>${escapeHtml(m.code)}</td>
       <td>${escapeHtml(m.status)}</td>
       <td>${tcCountForModule(m.id)}</td>
+      <td>${isMgmtRole ? `<button type="button" class="small danger" data-delete-module="${m.id}" data-mod-name="${escapeHtml(m.name)}" data-mod-tc-count="${tcCountForModule(m.id)}">Delete</button>` : ''}</td>
     </tr>
-  `).join('') : `<tr><td colspan="4" class="empty">No modules match your search.</td></tr>`;
-
-  const isMgmtRole = AUTH.role === 'Admin' || AUTH.role === 'SuperAdmin';
+  `).join('') : `<tr><td colspan="5" class="empty">No modules match your search.</td></tr>`;
   // Admin/SuperAdmin aren't restricted to their own team memberships -- their dropdown lists
   // EVERY team in the company (a browsing/filter view, not an access control), plus an "All
   // modules" option since they're never actually restricted. Lead/Contributor/Viewer only ever
@@ -2600,7 +2619,7 @@ function renderModuleMaster(){
         <input type="search" id="moduleMasterSearchBox" placeholder="Search module by name or code" value="${escapeHtml(state.moduleMasterSearch)}" style="min-width:220px;">
       </div>
       <table style="margin-top:10px;">
-        <thead><tr><th>Module</th><th>Code</th><th>Status</th><th>Test cases</th></tr></thead>
+        <thead><tr><th>Module</th><th>Code</th><th>Status</th><th>Test cases</th><th></th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
       <div class="actions-row" style="margin-top:10px;justify-content:space-between;">
@@ -3122,6 +3141,13 @@ function wireEvents(){
   if(state.showModuleMaster){
     document.querySelectorAll('tr.module-master-row').forEach(el => el.addEventListener('click', () => {
       selectModule(el.dataset.mod);
+    }));
+    // Registered directly on the button (not the row), so its own click listener runs first
+    // during bubbling; stopPropagation() there keeps the row's "open this module" handler
+    // above from also firing when someone clicks Delete.
+    document.querySelectorAll('[data-delete-module]').forEach(el => el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      deleteModuleAction(el.dataset.deleteModule, el.dataset.modName, Number(el.dataset.modTcCount || 0));
     }));
   }
 

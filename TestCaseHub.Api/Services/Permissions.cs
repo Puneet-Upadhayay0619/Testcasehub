@@ -35,6 +35,11 @@ public static class Permissions
     // Agreed: module creation is Contributor and above (moved down from Lead during planning).
     public static bool CanCreateModule(this ClaimsPrincipal user) => user.IsAtLeast(Roles.Contributor);
 
+    // Deleting a module takes every one of its test cases with it -- a much bigger blast
+    // radius than editing/creating one, so it sits at the same Admin-and-above bar as managing
+    // users/teams, not the lower Contributor bar module CREATION uses.
+    public static bool CanDeleteModule(this ClaimsPrincipal user) => user.IsAtLeast(Roles.Admin);
+
     // Viewer is read-only by design across the whole app: creating/editing/deprecating test
     // cases (including bulk-edit and spreadsheet import, which both go through the same
     // create/update path) requires Contributor and above, same bar as module creation.
