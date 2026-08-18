@@ -687,7 +687,8 @@ public class JsonFileDataStore : IDataStore
         });
 
     public Task<List<int>> GetTeamIdsForUserAsync(int userId) =>
-        WithLockAsync(async () => _data.TeamMembers.Where(tm => tm.UserId == userId).Select(tm => tm.TeamId).ToList());
+        // Ordered by TeamMember.Id (insertion order) -- see EfCoreDataStore's identical comment.
+        WithLockAsync(async () => _data.TeamMembers.Where(tm => tm.UserId == userId).OrderBy(tm => tm.Id).Select(tm => tm.TeamId).ToList());
 
     public Task AddTeamModuleAsync(int teamId, int moduleId) =>
         WithLockAsync(async () =>

@@ -196,6 +196,13 @@ async function apiFetch(path, options, _isRetryAfterRefresh){
   if(AUTH && AUTH.role === 'SuperAdmin' && state.actingCompanyId){
     path += (path.includes('?') ? '&' : '?') + 'companyId=' + state.actingCompanyId;
   }
+  // Lead/Contributor/Viewer see ONE team's modules at a time (default: their first-joined
+  // team), not a union of every team they're in -- see ModulesController.GetAll. Centralized
+  // here so every call site fetching /api/modules gets this automatically.
+  if(path.indexOf('/api/modules') === 0 && AUTH && AUTH.role !== 'Admin' && AUTH.role !== 'SuperAdmin'){
+    const effectiveTeamId = state.activeTeamId || (AUTH.teamIds && AUTH.teamIds[0]);
+    if(effectiveTeamId) path += (path.includes('?') ? '&' : '?') + 'teamId=' + effectiveTeamId;
+  }
   let res;
   try{
     res = await fetch(base + path, Object.assign({}, options, { headers }));
@@ -463,6 +470,11 @@ let state = {
   showModuleMaster: false,
   moduleMasterSearch: '',
   moduleMasterPage: 1,
+  // Which of the current user's teams' modules are being viewed (Lead/Contributor/Viewer only
+  // -- Admin/SuperAdmin always see every module, no team scoping). null = default to the
+  // first-joined team, same as the backend's own default.
+  activeTeamId: null,
+  myTeamsLoading: false,
   showImport: false,
   importStep: 1,
   importHeaders: [],
@@ -2516,6 +2528,23 @@ function renderDetail(tc){
   `;
 }
 
+// Lead/Contributor/Viewer only: fetch team names so the Module Master team-switcher can show
+// "Engineering", "Support", etc. instead of raw ids. GET /api/teams has no extra role gate
+// beyond company membership, so this is safe for any authenticated role to call -- it's only
+// USED here for non-Admin users who belong to more than one team.
+async function loadMyTeams(){
+  state.myTeamsLoading = true; render();
+  try{ DATA.teams = await apiFetch('/api/teams'); }
+  catch(err){ showToast('Could not load your teams: ' + err.message, 'error'); }
+  state.myTeamsLoading = false; render();
+}
+
+async function switchActiveTeam(teamId){
+  state.activeTeamId = teamId;
+  try{ DATA.modules = (await apiFetch('/api/modules')).map(normalizeModule); render(); }
+  catch(err){ showToast('Could not load modules for that team: ' + err.message, 'error'); }
+}
+
 const MODULE_MASTER_PAGE_SIZE = 10;
 function renderModuleMaster(){
   const q = state.moduleMasterSearch.trim().toLowerCase();
@@ -2534,10 +2563,24 @@ function renderModuleMaster(){
     </tr>
   `).join('') : `<tr><td colspan="4" class="empty">No modules match your search.</td></tr>`;
 
+  const myTeams = (AUTH.teamIds || []).map(id => (DATA.teams || []).find(t => t.id === id)).filter(Boolean);
+  const showTeamSwitcher = AUTH.role !== 'Admin' && AUTH.role !== 'SuperAdmin' && (AUTH.teamIds || []).length > 1;
+  const effectiveTeamId = state.activeTeamId || (AUTH.teamIds && AUTH.teamIds[0]);
+  const teamSwitcherHtml = !showTeamSwitcher ? '' : (
+    state.myTeamsLoading ? `<p class="sub" style="margin-top:-4px;">Loading your teams…</p>` :
+    `<div class="field" style="max-width:260px;margin-bottom:10px;">
+      <label>Viewing modules for team</label>
+      <select id="moduleMasterTeamSelect">
+        ${myTeams.map(t => `<option value="${t.id}" ${t.id === effectiveTeamId ? 'selected' : ''}>${escapeHtml(t.name)}</option>`).join('') || `<option value="">Loading…</option>`}
+      </select>
+    </div>`
+  );
+
   return `
     <div class="panel">
       <h3>Module Master</h3>
-      <p class="sub" style="margin-top:-6px;">All modules — click a row to open its test cases.</p>
+      <p class="sub" style="margin-top:-6px;">${showTeamSwitcher ? 'Modules for the team selected below — switch teams to see another.' : 'All modules — click a row to open its test cases.'}</p>
+      ${teamSwitcherHtml}
       <div class="toolbar">
         <input type="search" id="moduleMasterSearchBox" placeholder="Search module by name or code" value="${escapeHtml(state.moduleMasterSearch)}" style="min-width:220px;">
       </div>
@@ -2772,9 +2815,10 @@ function wireEvents(){
     clearAuth();
     DATA.modules = []; DATA.testCases = []; DATA.taskLinks = []; DATA.history = [];
     DATA.priorities = PRIORITIES.slice(); DATA.statuses = STATUSES.slice();
+    DATA.teams = [];
     state.moduleFilter = 'all'; state.expandedId = null; state.historyCache = {};
     state.showLogin = true; state.loginMode = 'login'; state.loginError = null;
-    state.actingCompanyId = null;
+    state.actingCompanyId = null; state.activeTeamId = null;
     render();
     showToast('Logged out.', 'success');
   });
@@ -3026,7 +3070,16 @@ function wireEvents(){
     const next = !state.showModuleMaster;
     closeAllPanels();
     state.showModuleMaster = next;
+    if(next && AUTH && AUTH.role !== 'Admin' && AUTH.role !== 'SuperAdmin' && (AUTH.teamIds || []).length > 1 && !DATA.teams.length){
+      loadMyTeams();
+    }
     render();
+  });
+
+  const moduleMasterTeamSelect = document.getElementById('moduleMasterTeamSelect');
+  if(moduleMasterTeamSelect) moduleMasterTeamSelect.addEventListener('change', () => {
+    state.moduleMasterPage = 1;
+    switchActiveTeam(Number(moduleMasterTeamSelect.value));
   });
 
   const moduleMasterSearchBox = document.getElementById('moduleMasterSearchBox');

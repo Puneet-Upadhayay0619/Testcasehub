@@ -184,7 +184,11 @@ public class EfCoreDataStore : IDataStore
         return await _db.Users.Where(u => userIds.Contains(u.Id)).ToListAsync();
     }
     public Task<List<int>> GetTeamIdsForUserAsync(int userId) =>
-        _db.TeamMembers.Where(tm => tm.UserId == userId).Select(tm => tm.TeamId).ToListAsync();
+        // Ordered by TeamMember.Id (insertion order) so index 0 is reliably the FIRST team this
+        // user was ever added to -- the Module Master "default to my first team" feature and the
+        // JWT teamIds claim both depend on this being deterministic, not whatever order the DB
+        // happens to return rows in.
+        _db.TeamMembers.Where(tm => tm.UserId == userId).OrderBy(tm => tm.Id).Select(tm => tm.TeamId).ToListAsync();
 
     public async Task AddTeamModuleAsync(int teamId, int moduleId)
     {

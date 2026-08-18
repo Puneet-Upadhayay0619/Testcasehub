@@ -20,7 +20,7 @@ public class ModulesController : ControllerBase
     // the agreed design. Everyone else ignores this param entirely and always sees only their
     // own company; they can't use it to peek into another company's data even if they pass one.
     [HttpGet]
-    public async Task<ActionResult<List<ModuleResponse>>> GetAll(int? companyId = null)
+    public async Task<ActionResult<List<ModuleResponse>>> GetAll(int? companyId = null, int? teamId = null)
     {
         int effectiveCompanyId;
         if (User.IsSuperAdmin())
@@ -38,14 +38,27 @@ public class ModulesController : ControllerBase
         var modules = (await _store.GetModulesAsync()).Where(m => m.CompanyId == effectiveCompanyId).ToList();
 
         // Team-based module visibility (Phase 8): Admin/SuperAdmin see every module in the
-        // company; Lead/Contributor/Viewer only see modules assigned to a team they're in.
+        // company. Lead/Contributor/Viewer are scoped to exactly ONE team at a time -- by
+        // default their first (earliest-joined) team, or whichever team they explicitly pass
+        // via ?teamId= (only honored if it's actually one of their teams) -- rather than a
+        // combined union of every team they belong to, so someone in 3 teams sees one team's
+        // modules at a time with a clear way to switch, instead of all 3 teams' modules mixed
+        // together with no indication of which is which.
         if (!User.IsAtLeast(Roles.Admin))
         {
+            var myTeamIds = User.GetTeamIds();
+            int? scopeTeamId = (teamId.HasValue && myTeamIds.Contains(teamId.Value))
+                ? teamId.Value
+                : (myTeamIds.Count > 0 ? myTeamIds[0] : (int?)null);
+
             var visible = new List<Module>();
-            foreach (var m in modules)
+            if (scopeTeamId.HasValue)
             {
-                var moduleTeamIds = await _store.GetTeamIdsForModuleAsync(m.Id);
-                if (User.HasModuleAccessViaTeam(moduleTeamIds)) visible.Add(m);
+                foreach (var m in modules)
+                {
+                    var moduleTeamIds = await _store.GetTeamIdsForModuleAsync(m.Id);
+                    if (moduleTeamIds.Contains(scopeTeamId.Value)) visible.Add(m);
+                }
             }
             modules = visible;
         }
