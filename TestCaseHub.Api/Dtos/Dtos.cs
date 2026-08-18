@@ -68,6 +68,7 @@ public record UserResponse(int Id, string Email, string DisplayName, string Role
 
 public record UpdateUserAccessRequest(string Role, List<string>? LayerScope, List<int>? ModuleScope);
 public record UpdateEmailRequest(string NewEmail);
+public record AssignCompanyAdminRequest(int UserId);
 
 public record AuditLogResponse(int Id, string ActorEmail, string ActorDisplayName, string Action, string TargetDescription, string DetailsJson, DateTime OccurredAt);
 

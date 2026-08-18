@@ -143,6 +143,47 @@ public class CompanyMcpTools
         return new AssignUsersByDomainResult(matched.Count, matched.Select(u => u.Email).ToList());
     }
 
+    [McpServerTool(Name = "assign_company_admin"), Description(
+        "SuperAdmin only. Converts an EXISTING user (including another SuperAdmin) into the given company's " +
+        "Admin -- sets Role=Admin and CompanyId=companyId together in one step. Use this to fix an accidental " +
+        "second SuperAdmin account by turning one of them into a normal company Admin, or to promote/move any " +
+        "existing user id to be a different company's Admin. Neither assign_users_by_domain (skips SuperAdmin " +
+        "rows) nor a plain role change (never touches CompanyId) covers this.")]
+    public async Task<object> AssignCompanyAdmin(ClaimsPrincipal user, int userId, int companyId)
+    {
+        if (!user.CanManageCompanies())
+            return new { error = "You do not have permission to manage companies (SuperAdmin only)." };
+
+        var company = await _store.GetCompanyAsync(companyId);
+        if (company is null) return new { error = "Company not found." };
+
+        var target = await _store.GetUserByIdAsync(userId);
+        if (target is null) return new { error = "User not found." };
+
+        var oldTeamIds = await _store.GetTeamIdsForUserAsync(target.Id);
+        foreach (var teamId in oldTeamIds)
+        {
+            var team = await _store.GetTeamAsync(teamId);
+            if (team is not null && team.CompanyId != companyId)
+                await _store.RemoveTeamMemberAsync(teamId, target.Id);
+        }
+
+        var previousRole = target.Role;
+        var previousCompanyId = target.CompanyId;
+        target.Role = Roles.Admin;
+        target.CompanyId = companyId;
+        target = await _store.UpdateUserAsync(target);
+
+        await _store.AddAuditLogAsync(new AuditLog
+        {
+            CompanyId = companyId, ActorEmail = EmailOf(user), ActorDisplayName = EmailOf(user), Action = "UserAssignedAsCompanyAdmin",
+            TargetDescription = target.Email,
+            DetailsJson = System.Text.Json.JsonSerializer.Serialize(new { previousRole, previousCompanyId, newRole = target.Role, newCompanyId = target.CompanyId, companyName = company.Name, via = "mcp" })
+        });
+
+        return UserResponse.From(target, await _store.GetTeamIdsForUserAsync(target.Id));
+    }
+
     [McpServerTool(Name = "list_all_modules"), Description(
         "SuperAdmin only. List every module across every company (with company id/name and test case count) -- " +
         "use this to find a module's id and current company before calling move_module_to_company. " +

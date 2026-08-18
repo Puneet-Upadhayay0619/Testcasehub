@@ -195,6 +195,52 @@ public class CompaniesController : ControllerBase
         return new AssignUsersByDomainResult(matched.Count, matched.Select(u => u.Email).ToList());
     }
 
+    // SuperAdmin only. Converts an EXISTING user -- including another SuperAdmin -- into THIS
+    // company's Admin: sets Role=Admin and CompanyId=this company, in one atomic step. Neither
+    // existing tool covers this: assign-users-by-domain explicitly skips SuperAdmin rows (it's
+    // for splitting already-company-scoped users, not demoting a platform admin), and
+    // PUT /{id}/access changes Role but never touches CompanyId. Mainly for the "I created a
+    // second SuperAdmin account by accident, now I want one of them to just be this company's
+    // Admin instead" situation -- but works for promoting/moving any existing user id, e.g. a
+    // Contributor in Company A becoming Company B's Admin.
+    [HttpPost("{id:int}/assign-admin")]
+    public async Task<ActionResult<UserResponse>> AssignCompanyAdmin(int id, AssignCompanyAdminRequest req)
+    {
+        if (!User.CanManageCompanies()) return Forbid();
+
+        var company = await _store.GetCompanyAsync(id);
+        if (company is null) return NotFound("Company not found.");
+
+        var target = await _store.GetUserByIdAsync(req.UserId);
+        if (target is null) return NotFound("User not found.");
+
+        var before = new { target.Role, target.CompanyId };
+
+        // Same "drop team memberships that only made sense in the OLD company" cleanup as
+        // assign-users-by-domain -- a SuperAdmin has none, but this keeps the tool correct for
+        // any user, not just the SuperAdmin-conversion case.
+        var oldTeamIds = await _store.GetTeamIdsForUserAsync(target.Id);
+        foreach (var teamId in oldTeamIds)
+        {
+            var team = await _store.GetTeamAsync(teamId);
+            if (team is not null && team.CompanyId != id)
+                await _store.RemoveTeamMemberAsync(teamId, target.Id);
+        }
+
+        target.Role = Roles.Admin;
+        target.CompanyId = id;
+        target = await _store.UpdateUserAsync(target);
+
+        await _store.AddAuditLogAsync(new AuditLog
+        {
+            CompanyId = id, ActorEmail = ActorEmail, ActorDisplayName = ActorEmail, Action = "UserAssignedAsCompanyAdmin",
+            TargetDescription = target.Email,
+            DetailsJson = System.Text.Json.JsonSerializer.Serialize(new { before, after = new { target.Role, target.CompanyId }, companyName = company.Name })
+        });
+
+        return UserResponse.From(target, await _store.GetTeamIdsForUserAsync(target.Id));
+    }
+
     // One-off/repeatable fixer: removes any team member or team-module link that no longer
     // matches its team's company (e.g. a user moved companies via assign-users-by-domain before
     // that cleanup was added, or any other drift). Safe to run repeatedly -- a no-op once clean.
