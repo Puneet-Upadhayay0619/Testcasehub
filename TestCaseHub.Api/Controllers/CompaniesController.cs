@@ -211,8 +211,14 @@ public class CompaniesController : ControllerBase
         var company = await _store.GetCompanyAsync(id);
         if (company is null) return NotFound("Company not found.");
 
-        var target = await _store.GetUserByIdAsync(req.UserId);
-        if (target is null) return NotFound("User not found.");
+        // Email, not userId -- there is no "look up a user by id" surface exposed to a
+        // SuperAdmin (list_users_in_company is company-scoped, and this account may currently
+        // be a SuperAdmin with no company to list it under), but the caller always knows the
+        // target's email, so that's the safe, always-available identifier here.
+        var normalizedEmail = (req.Email ?? "").Trim().ToLowerInvariant();
+        if (string.IsNullOrWhiteSpace(normalizedEmail)) return BadRequest("Email is required.");
+        var target = await _store.GetUserByEmailAsync(normalizedEmail);
+        if (target is null) return NotFound("No account exists with that email.");
 
         var before = new { target.Role, target.CompanyId };
 

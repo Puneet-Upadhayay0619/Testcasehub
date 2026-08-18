@@ -144,12 +144,12 @@ public class CompanyMcpTools
     }
 
     [McpServerTool(Name = "assign_company_admin"), Description(
-        "SuperAdmin only. Converts an EXISTING user (including another SuperAdmin) into the given company's " +
-        "Admin -- sets Role=Admin and CompanyId=companyId together in one step. Use this to fix an accidental " +
-        "second SuperAdmin account by turning one of them into a normal company Admin, or to promote/move any " +
-        "existing user id to be a different company's Admin. Neither assign_users_by_domain (skips SuperAdmin " +
-        "rows) nor a plain role change (never touches CompanyId) covers this.")]
-    public async Task<object> AssignCompanyAdmin(ClaimsPrincipal user, int userId, int companyId)
+        "SuperAdmin only. Converts an EXISTING user, found by EMAIL (including another SuperAdmin), into the " +
+        "given company's Admin -- sets Role=Admin and CompanyId=companyId together in one step. Use this to fix " +
+        "an accidental second SuperAdmin account by turning one of them into a normal company Admin, or to " +
+        "promote/move any existing account to be a different company's Admin. Neither assign_users_by_domain " +
+        "(skips SuperAdmin rows) nor a plain role change (never touches CompanyId) covers this.")]
+    public async Task<object> AssignCompanyAdmin(ClaimsPrincipal user, string email, int companyId)
     {
         if (!user.CanManageCompanies())
             return new { error = "You do not have permission to manage companies (SuperAdmin only)." };
@@ -157,8 +157,10 @@ public class CompanyMcpTools
         var company = await _store.GetCompanyAsync(companyId);
         if (company is null) return new { error = "Company not found." };
 
-        var target = await _store.GetUserByIdAsync(userId);
-        if (target is null) return new { error = "User not found." };
+        var normalizedEmail = (email ?? "").Trim().ToLowerInvariant();
+        if (string.IsNullOrWhiteSpace(normalizedEmail)) return new { error = "email is required." };
+        var target = await _store.GetUserByEmailAsync(normalizedEmail);
+        if (target is null) return new { error = "No account exists with that email." };
 
         var oldTeamIds = await _store.GetTeamIdsForUserAsync(target.Id);
         foreach (var teamId in oldTeamIds)
