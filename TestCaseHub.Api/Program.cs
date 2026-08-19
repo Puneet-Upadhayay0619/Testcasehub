@@ -366,14 +366,12 @@ using (var seedScope = app.Services.CreateScope())
     foreach (var m in (await seedStore.GetModulesAsync()).Where(m => m.CompanyId == defaultCompany.Id))
         await seedStore.AddTeamModuleAsync(defaultTeam.Id, m.Id);
 
-    var superAdminEmail = "puneet@flick2know.com";
-    var superAdminUser = await seedStore.GetUserByEmailAsync(superAdminEmail);
-    if (superAdminUser is not null && superAdminUser.Role != TestCaseHub.Api.Models.Roles.SuperAdmin)
-    {
-        superAdminUser.Role = TestCaseHub.Api.Models.Roles.SuperAdmin;
-        superAdminUser.CompanyId = null;
-        await seedStore.UpdateUserAsync(superAdminUser);
-    }
+    // NOTE: this used to force-promote puneet@flick2know.com to SuperAdmin on every single
+    // startup (per an earlier explicit instruction). Removed because that account was
+    // deliberately converted to Flick2know Private Limited's Admin via assign_company_admin --
+    // this seed block was silently undoing that change on every Render restart/redeploy,
+    // which is exactly the bug that made the role change look like it "wasn't sticking."
+    // upadhayay0206@gmail.com is the platform SuperAdmin now; no email-specific override here.
 }
 
 if (app.Environment.IsDevelopment())
