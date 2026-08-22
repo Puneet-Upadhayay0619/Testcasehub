@@ -85,19 +85,36 @@ public class AutomationScriptMcpTools
     }
 
     [McpServerTool(Name = "update_automation_script_status"),
-     Description("Move a saved automation script through Draft -> Reviewed -> Approved. Requires Contributor role or above.")]
+     Description("Move a saved automation script through Draft -> Reviewed -> Approved. Requires Contributor role or above -- moving to Approved specifically requires Lead or above, since that also marks the linked test case automation-ready. Approving a script for a real test case automatically sets that test case's automationReady=true and automationScriptRef to point at this script/version.")]
     public async Task<object> UpdateAutomationScriptStatus(ClaimsPrincipal user, int scriptId, [Description("Draft, Reviewed, or Approved")] string status)
     {
         if (!user.CanManageAutomationScripts())
             return new { error = "You do not have permission to update automation scripts (Contributor role or above required)." };
         if (!AutomationScriptStatus.All.Contains(status))
             return new { error = "status must be Draft, Reviewed, or Approved." };
+        // Same bar as Permissions.CanManageAutomationReady -- approving IS flipping that flag.
+        if (status == AutomationScriptStatus.Approved && !user.CanManageAutomationReady())
+            return new { error = "Moving a script to Approved requires Lead role or above (it also marks the linked test case automation-ready)." };
 
         var existing = await _store.GetAutomationScriptAsync(scriptId);
         if (existing is null) return new { error = "Automation script not found." };
         if (!user.HasCompanyAccess(existing.CompanyId)) return new { error = "You do not have access to this script's company." };
 
         var script = await _store.UpdateAutomationScriptStatusAsync(scriptId, status);
-        return AutomationScriptResponse.From(script);
+
+        string? testCaseUpdateNote = null;
+        if (status == AutomationScriptStatus.Approved && !string.IsNullOrWhiteSpace(script.TestCaseId))
+        {
+            var tc = await _store.GetTestCaseAsync(script.TestCaseId);
+            if (tc is not null && tc.ModuleId == script.ModuleId)
+            {
+                tc.AutomationReady = true;
+                tc.AutomationScriptRef = $"{script.FileName} (v{script.Version}, AutomationScript #{script.Id})";
+                await _store.UpdateTestCaseAsync(tc);
+                testCaseUpdateNote = $"Test case {tc.Id} marked automationReady=true, automationScriptRef updated.";
+            }
+        }
+
+        return new { script = AutomationScriptResponse.From(script), testCaseUpdate = testCaseUpdateNote };
     }
 }

@@ -111,11 +111,11 @@ public record ReleaseResponse(int Id, string Name, string Version, string Status
 }
 public record TransitionReleaseRequest(string NewStatus, string? Comment);
 
-public record CreateTestRunRequest(int? ReleaseId, int? SuiteId, string Name, string TargetEnvironment, int? EnvironmentTargetId = null);
-public record TestRunResponse(int Id, int? ReleaseId, int? SuiteId, string Name, string TargetEnvironment, int? EnvironmentTargetId, string CreatedBy, DateTime CreatedAt)
+public record CreateTestRunRequest(int? ReleaseId, int? SuiteId, string Name, string TargetEnvironment, int? EnvironmentTargetId = null, int? EnvironmentCredentialId = null);
+public record TestRunResponse(int Id, int? ReleaseId, int? SuiteId, string Name, string TargetEnvironment, int? EnvironmentTargetId, int? EnvironmentCredentialId, string CreatedBy, DateTime CreatedAt)
 {
     public static TestRunResponse From(TestCaseHub.Api.Models.TestRun t) =>
-        new(t.Id, t.ReleaseId, t.SuiteId, t.Name, t.TargetEnvironment, t.EnvironmentTargetId, t.CreatedBy, t.CreatedAt);
+        new(t.Id, t.ReleaseId, t.SuiteId, t.Name, t.TargetEnvironment, t.EnvironmentTargetId, t.EnvironmentCredentialId, t.CreatedBy, t.CreatedAt);
 }
 
 public record RecordManualResultRequest(string TestCaseId, string? Platform, string Status, string? Notes);

@@ -43,14 +43,25 @@ public class TestRunsController : ControllerBase
     public async Task<ActionResult<TestRunResponse>> Create(CreateTestRunRequest req, [FromQuery] int? companyId = null)
     {
         if (!User.IsAtLeast(Roles.Contributor)) return Forbid();
+        // Attaching a named execution credential is the "trigger automation as this login"
+        // action agreed in planning -- Company Admin AND Team Lead can do this (Contributor
+        // cannot), even though a bare Contributor can still create a credential-less test run.
+        if (req.EnvironmentCredentialId is not null && !User.CanTriggerTestRun()) return Forbid();
         companyId = User.ResolveActingCompanyId(companyId);
         if (companyId is null) return User.IsSuperAdmin() ? BadRequest("SuperAdmin must specify ?companyId=.") : Forbid();
         if (string.IsNullOrWhiteSpace(req.Name)) return BadRequest("Test run name is required.");
+        if (req.EnvironmentCredentialId is not null)
+        {
+            var cred = await _store.GetEnvironmentCredentialAsync(req.EnvironmentCredentialId.Value);
+            if (cred is null || cred.EnvironmentTargetId != req.EnvironmentTargetId)
+                return BadRequest("EnvironmentCredentialId must belong to the selected EnvironmentTargetId.");
+        }
         var run = new TestRun
         {
             CompanyId = companyId.Value,
             ReleaseId = req.ReleaseId, SuiteId = req.SuiteId, Name = req.Name.Trim(),
-            TargetEnvironment = req.TargetEnvironment ?? "", EnvironmentTargetId = req.EnvironmentTargetId, CreatedBy = ActorDisplayName
+            TargetEnvironment = req.TargetEnvironment ?? "", EnvironmentTargetId = req.EnvironmentTargetId,
+            EnvironmentCredentialId = req.EnvironmentCredentialId, CreatedBy = ActorDisplayName
         };
         run = await _store.CreateTestRunAsync(run);
         return TestRunResponse.From(run);

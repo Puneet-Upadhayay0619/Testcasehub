@@ -57,6 +57,11 @@ public class TestRun
     // This is what the Production safety block checks -- if the linked environment's
     // EnvironmentType is Production, automated result posting is rejected outright.
     public int? EnvironmentTargetId { get; set; }
+    // Which named EnvironmentCredential (if any) this run is authorized to execute as --
+    // agreed in planning: a Lead can trigger a run using one of these by Label, without ever
+    // seeing the actual password (see Permissions.CanTriggerTestRun). Optional: plenty of runs
+    // (manual-only, or automation that doesn't need to log in) have no credential at all.
+    public int? EnvironmentCredentialId { get; set; }
     [MaxLength(256)]
     public string CreatedBy { get; set; } = "";
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;

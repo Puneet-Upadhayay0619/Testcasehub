@@ -339,6 +339,10 @@ if (storageMode == "SqlServer")
             );",
             @"CREATE INDEX IF NOT EXISTS ""IX_EnvironmentCredentials_EnvironmentTargetId"" ON ""EnvironmentCredentials"" (""EnvironmentTargetId"");",
 
+            // Test Run -> named execution credential (agreed in planning: Lead can trigger a run
+            // using a stored credential by Label, never seeing the password).
+            @"ALTER TABLE ""TestRuns"" ADD COLUMN IF NOT EXISTS ""EnvironmentCredentialId"" integer NULL;",
+
             @"CREATE TABLE IF NOT EXISTS ""AutomationScripts"" (
                 ""Id"" serial PRIMARY KEY,
                 ""CompanyId"" integer NOT NULL DEFAULT 0,

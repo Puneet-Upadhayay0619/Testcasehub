@@ -79,8 +79,30 @@ public class AutomationScriptsController : ControllerBase
         if (script is null) return NotFound("Automation script not found.");
         if (!User.HasCompanyAccess(script.CompanyId)) return Forbid();
         if (!AutomationScriptStatus.All.Contains(req.Status)) return BadRequest("Status must be Draft, Reviewed, or Approved.");
+        // Approving a script is the exact same significant action as flipping a test case's
+        // automationReady flag (it does so automatically, right below) -- so it sits at the
+        // same Lead-and-above bar as CanManageAutomationReady, not the lower Contributor bar
+        // that covers Draft/Reviewed and every other script edit.
+        if (req.Status == AutomationScriptStatus.Approved && !User.CanManageAutomationReady())
+            return Forbid();
 
         script = await _store.UpdateAutomationScriptStatusAsync(id, req.Status);
+
+        // Cascade: an Approved script for a real test case marks that test case
+        // automation-ready and points its automationScriptRef at this exact script/version --
+        // closing the loop the user asked for between "script is approved" and "test case
+        // shows up as automated" instead of leaving the two hand-synced.
+        if (req.Status == AutomationScriptStatus.Approved && !string.IsNullOrWhiteSpace(script.TestCaseId))
+        {
+            var tc = await _store.GetTestCaseAsync(script.TestCaseId);
+            if (tc is not null && tc.ModuleId == script.ModuleId)
+            {
+                tc.AutomationReady = true;
+                tc.AutomationScriptRef = $"{script.FileName} (v{script.Version}, AutomationScript #{script.Id})";
+                await _store.UpdateTestCaseAsync(tc);
+            }
+        }
+
         return Ok(AutomationScriptResponse.From(script));
     }
 }

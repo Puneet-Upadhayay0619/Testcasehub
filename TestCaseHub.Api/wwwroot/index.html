@@ -515,6 +515,7 @@ let state = {
   showTestRuns: false,
   testRunsLoading: false,
   showCreateTestRun: false,
+  runFormEnvTargetId: '',
   testRunDetailId: null,
   testRunResultsCache: {},
   testRunRollupCache: {},
@@ -598,6 +599,7 @@ function closeAllPanels(){
   state.releaseDetailId = null;
   state.showTestRuns = false;
   state.showCreateTestRun = false;
+  state.runFormEnvTargetId = '';
   state.testRunDetailId = null;
   state.showReports = false;
   state.showApiKeys = false;
@@ -1959,7 +1961,16 @@ function renderTestRuns(){
           <div class="field"><label>Target environment (label)</label><input type="text" id="runTargetEnv" placeholder="e.g. Staging"></div>
           <div class="field"><label>Release (optional)</label><select id="runRelease"><option value="">None</option>${(DATA.releases||[]).map(r=>`<option value="${r.id}">${escapeHtml(r.name)}</option>`).join('')}</select></div>
           <div class="field"><label>Suite (optional)</label><select id="runSuite"><option value="">None</option>${(DATA.suites||[]).map(s=>`<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('')}</select></div>
-          <div class="field"><label>Environment Target (optional)</label><select id="runEnvTarget"><option value="">None</option>${(DATA.environments||[]).map(e=>`<option value="${e.id}">${escapeHtml(e.name)} (${escapeHtml(e.environmentType)})</option>`).join('')}</select></div>
+          <div class="field"><label>Environment Target (optional)</label><select id="runEnvTarget"><option value="">None</option>${(DATA.environments||[]).map(e=>`<option value="${e.id}" ${String(e.id)===String(state.runFormEnvTargetId)?'selected':''}>${escapeHtml(e.name)} (${escapeHtml(e.environmentType)})</option>`).join('')}</select></div>
+          ${state.runFormEnvTargetId ? `
+          <div class="field"><label>Run as credential (optional)</label>
+            <select id="runCredential">
+              <option value="">None</option>
+              ${(DATA.environmentCredentials[state.runFormEnvTargetId]||[]).map(c=>`<option value="${c.id}">${escapeHtml(c.label)}${c.tag?' — '+escapeHtml(c.tag):''}</option>`).join('')}
+            </select>
+            <p class="sub" style="margin:2px 0 0;">Requires Lead role or above — Team Lead can trigger a run using a stored login without ever seeing its password.</p>
+          </div>
+          ` : ''}
         </div>
         <div class="actions-row"><button type="button" id="saveTestRunBtn">Create test run</button></div>
       ` : ''}
@@ -3475,7 +3486,13 @@ function wireEvents(){
   const closeTestRuns = document.getElementById('closeTestRuns');
   if(closeTestRuns) closeTestRuns.addEventListener('click', () => { state.showTestRuns = false; render(); });
   const toggleCreateTestRun = document.getElementById('toggleCreateTestRun');
-  if(toggleCreateTestRun) toggleCreateTestRun.addEventListener('click', () => { state.showCreateTestRun = !state.showCreateTestRun; render(); });
+  if(toggleCreateTestRun) toggleCreateTestRun.addEventListener('click', () => { state.showCreateTestRun = !state.showCreateTestRun; state.runFormEnvTargetId = ''; render(); });
+  const runEnvTarget = document.getElementById('runEnvTarget');
+  if(runEnvTarget) runEnvTarget.addEventListener('change', (e) => {
+    state.runFormEnvTargetId = e.target.value;
+    render();
+    if(state.runFormEnvTargetId) loadEnvironmentCredentials(state.runFormEnvTargetId);
+  });
   const saveTestRunBtn = document.getElementById('saveTestRunBtn');
   if(saveTestRunBtn) saveTestRunBtn.addEventListener('click', () => {
     const name = document.getElementById('runName').value.trim();
@@ -3484,11 +3501,14 @@ function wireEvents(){
     const releaseId = document.getElementById('runRelease').value;
     const suiteId = document.getElementById('runSuite').value;
     const envTargetId = document.getElementById('runEnvTarget').value;
+    const credentialEl = document.getElementById('runCredential');
+    const credentialId = credentialEl ? credentialEl.value : '';
     createTestRun({
       name, targetEnvironment,
       releaseId: releaseId ? Number(releaseId) : null,
       suiteId: suiteId ? Number(suiteId) : null,
-      environmentTargetId: envTargetId ? Number(envTargetId) : null
+      environmentTargetId: envTargetId ? Number(envTargetId) : null,
+      environmentCredentialId: credentialId ? Number(credentialId) : null
     });
   });
   document.querySelectorAll('[data-toggle-run]').forEach(el => el.addEventListener('click', () => {
