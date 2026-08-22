@@ -393,9 +393,13 @@ if (storageMode == "SqlServer")
 //      yet assigned" sentinel used for the non-nullable columns) into that Default Company,
 //      and put all of it into one "Default Team" so nobody who could already see a module
 //      loses that access the moment this code first runs.
-//   3) Explicitly promote puneet@flick2know.com to SuperAdmin, per explicit instruction --
-//      self-correcting on every startup (not just the first), and detach them from any
-//      company, matching what SuperAdmin means everywhere else in this codebase.
+//   3) (REMOVED -- this used to force-promote puneet@flick2know.com back to SuperAdmin on
+//      EVERY startup, which silently reverted any deliberate role change made afterwards --
+//      including via the Manage Users screen -- the next time the app restarted/redeployed.
+//      That's exactly the bug reported: a role change "kept undoing itself". The one-time
+//      bootstrap rule (first-ever registered user on a brand-new deployment becomes SuperAdmin)
+//      already lives in AuthController.Register and is not affected by this removal -- it only
+//      fires once, when the very first account is created, never again afterwards.
 using (var seedScope = app.Services.CreateScope())
 {
     var seedStore = seedScope.ServiceProvider.GetRequiredService<IDataStore>();
@@ -444,14 +448,6 @@ using (var seedScope = app.Services.CreateScope())
     foreach (var m in (await seedStore.GetModulesAsync()).Where(m => m.CompanyId == defaultCompany.Id))
         await seedStore.AddTeamModuleAsync(defaultTeam.Id, m.Id);
 
-    var superAdminEmail = "puneet@flick2know.com";
-    var superAdminUser = await seedStore.GetUserByEmailAsync(superAdminEmail);
-    if (superAdminUser is not null && superAdminUser.Role != TestCaseHub.Api.Models.Roles.SuperAdmin)
-    {
-        superAdminUser.Role = TestCaseHub.Api.Models.Roles.SuperAdmin;
-        superAdminUser.CompanyId = null;
-        await seedStore.UpdateUserAsync(superAdminUser);
-    }
 }
 
 if (app.Environment.IsDevelopment())
