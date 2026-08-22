@@ -439,7 +439,7 @@ function fmtDate(iso){ if(!iso) return ''; const d = new Date(iso); return d.toL
 // DATA now mirrors whatever the server most recently returned — it is a cache for rendering,
 // not the source of truth. bootstrap() fills it after login; module selection, history expand,
 // AI-generate and import all refresh the relevant slice after they write to the server.
-let DATA = { modules: [], taskLinks: [], testCases: [], history: [], priorities: PRIORITIES.slice(), statuses: STATUSES.slice(), users: [], invites: [], notifications: [], suites: [], releases: [], testRuns: [], coverage: [], trend: [], apiKeys: [], environments: [], duplicates: [], auditLog: [], companies: [], teams: [] };
+let DATA = { modules: [], taskLinks: [], testCases: [], history: [], priorities: PRIORITIES.slice(), statuses: STATUSES.slice(), users: [], invites: [], notifications: [], suites: [], releases: [], testRuns: [], coverage: [], trend: [], apiKeys: [], environments: [], duplicates: [], auditLog: [], companies: [], teams: [], moduleRepoLinks: {}, environmentCredentials: {}, automationScripts: [] };
 
 let state = {
   showLogin: true,
@@ -525,6 +525,20 @@ let state = {
   showEnvironments: false,
   environmentsLoading: false,
   showCreateEnvironment: false,
+  expandedEnvId: null,
+  envCredentialsLoading: false,
+  showAddCredential: false,
+  editingCredentialId: null,
+  showRepoLinks: false,
+  repoLinksModuleId: '',
+  repoLinksLoading: false,
+  showAddRepoLink: false,
+  editingRepoLinkId: null,
+  showAutomationScripts: false,
+  automationScriptsLoading: false,
+  automationScriptsModuleId: '',
+  automationScriptsTestCaseId: '',
+  viewingScriptId: null,
   showDuplicates: false,
   duplicatesLoading: false,
   showBulkEdit: false,
@@ -589,6 +603,14 @@ function closeAllPanels(){
   state.showApiKeys = false;
   state.showEnvironments = false;
   state.showCreateEnvironment = false;
+  state.expandedEnvId = null;
+  state.showAddCredential = false;
+  state.editingCredentialId = null;
+  state.showRepoLinks = false;
+  state.showAddRepoLink = false;
+  state.editingRepoLinkId = null;
+  state.showAutomationScripts = false;
+  state.viewingScriptId = null;
   state.showDuplicates = false;
   state.showBulkEdit = false;
   state.showBulkDelete = false;
@@ -996,6 +1018,8 @@ function render(){
         ${state.showReports ? renderReports() : ''}
         ${state.showApiKeys ? renderApiKeys() : ''}
         ${state.showEnvironments ? renderEnvironments() : ''}
+        ${state.showRepoLinks ? renderRepoLinks() : ''}
+        ${state.showAutomationScripts ? renderAutomationScripts() : ''}
         ${state.showDuplicates ? renderDuplicates() : ''}
         ${state.showBulkEdit ? renderBulkEdit() : ''}
         ${state.showBulkDelete ? renderBulkDelete() : ''}
@@ -1017,7 +1041,7 @@ function renderMainArea(){
 function isAnyPanelOpen(){
   return state.showModuleMaster || state.showAddModule || state.showAddTestCase || !!state.editingId || !!state.showAddTaskLink || state.showExportPicker || state.showImport ||
     state.showManageUsers || state.showInviteLinks || state.showAuditLog || state.showNotifications || state.showSuites || state.showReleases || state.showTestRuns || state.showReports ||
-    state.showApiKeys || state.showEnvironments || state.showDuplicates || state.showBulkEdit || state.showBulkDelete || state.showTeams;
+    state.showApiKeys || state.showEnvironments || state.showRepoLinks || state.showAutomationScripts || state.showDuplicates || state.showBulkEdit || state.showBulkDelete || state.showTeams;
 }
 
 // ---------- Phase 8: SuperAdmin shell + Companies ----------
@@ -2048,16 +2072,79 @@ async function createEnvironment(payload){
     showToast('Environment "' + created.name + '" created.', 'success');
   } catch(err){ showToast('Could not create environment: ' + err.message, 'error'); }
 }
+// ---------------- Environment execution credentials (named logins per environment) ----------------
+async function loadEnvironmentCredentials(envId){
+  state.envCredentialsLoading = true; render();
+  try{ DATA.environmentCredentials[envId] = await apiFetch('/api/environments/' + envId + '/credentials'); }
+  catch(err){ showToast('Could not load credentials: ' + err.message, 'error'); }
+  state.envCredentialsLoading = false; render();
+}
+async function createEnvironmentCredential(envId, payload){
+  try{
+    const created = await apiFetch('/api/environments/' + envId + '/credentials', { method:'POST', body: JSON.stringify(payload) });
+    DATA.environmentCredentials[envId] = (DATA.environmentCredentials[envId]||[]).concat([created]);
+    state.showAddCredential = false;
+    render();
+    showToast('Credential "' + created.label + '" saved.', 'success');
+  } catch(err){ showToast('Could not save credential: ' + err.message, 'error'); }
+}
+async function deleteEnvironmentCredential(envId, id){
+  if(!confirm('Delete this credential? This cannot be undone.')) return;
+  try{
+    await apiFetch('/api/environments/' + envId + '/credentials/' + id, { method:'DELETE' });
+    DATA.environmentCredentials[envId] = (DATA.environmentCredentials[envId]||[]).filter(c => c.id !== id);
+    render();
+    showToast('Credential deleted.', 'success');
+  } catch(err){ showToast('Could not delete credential: ' + err.message, 'error'); }
+}
+
 function renderEnvironments(){
   if(state.environmentsLoading) return `<div class="panel"><h3>Environment Targets</h3><p class="sub" style="margin-top:-6px;">Loading…</p></div>`;
-  const rows = (DATA.environments||[]).map(e => `
+  const rows = (DATA.environments||[]).map(e => {
+    const expanded = state.expandedEnvId === e.id;
+    const creds = DATA.environmentCredentials[e.id] || [];
+    const credRows = creds.map(c => `
+      <tr>
+        <td>${escapeHtml(c.label)}</td>
+        <td>${escapeHtml(c.email||'')}</td>
+        <td>${escapeHtml(c.tag||'')}</td>
+        <td>${c.hasPassword ? '✓' : ''}</td>
+        <td><button type="button" class="small danger" data-delete-credential="${c.id}" data-cred-env="${e.id}">Delete</button></td>
+      </tr>
+    `).join('');
+    const credsBlock = !expanded ? '' : `
+      <tr><td colspan="5" style="background:var(--bg-soft);padding:12px;">
+        <strong style="font-size:13px;">Named execution credentials</strong>
+        <p class="sub" style="margin:2px 0 8px;">Agreed in planning: a Lead triggering a run picks one of these by Label -- the password is encrypted at rest and never shown again after saving.</p>
+        ${state.envCredentialsLoading ? '<p class="sub">Loading…</p>' : `
+          <table style="margin-bottom:8px;">
+            <thead><tr><th>Label</th><th>Email</th><th>Tag</th><th>Password set</th><th></th></tr></thead>
+            <tbody>${credRows || '<tr><td colspan="5" class="empty">No credentials yet.</td></tr>'}</tbody>
+          </table>
+        `}
+        ${canEditContent() ? `<div class="actions-row"><button type="button" class="secondary small" data-toggle-add-credential="${e.id}">${state.showAddCredential ? 'Cancel' : '+ Add credential'}</button></div>` : ''}
+        ${state.showAddCredential ? `
+          <div class="grid2">
+            <div class="field"><label>Label</label><input type="text" id="credLabel_${e.id}" placeholder="e.g. Primary Admin"></div>
+            <div class="field"><label>Email (optional)</label><input type="text" id="credEmail_${e.id}"></div>
+            <div class="field"><label>Password</label><input type="password" id="credPassword_${e.id}"></div>
+            <div class="field"><label>Tag (optional)</label><input type="text" id="credTag_${e.id}" placeholder="e.g. modern-trade-enabled"></div>
+          </div>
+          <div class="actions-row"><button type="button" data-save-credential="${e.id}">Save credential</button></div>
+        ` : ''}
+      </td></tr>
+    `;
+    return `
     <tr>
       <td>${escapeHtml(e.name)}<br><small class="muted">${escapeHtml(e.tenant||'')}</small></td>
       <td><span class="${e.environmentType==='Production'?'badge b-p1':'badge b-active'}">${escapeHtml(e.environmentType)}</span></td>
       <td>${escapeHtml(e.appBaseUrl||'')}</td>
       <td>${e.hasMasterDbConnection?'Master ✓ ':''}${e.hasTransactionDbConnection?'Txn ✓ ':''}${e.hasReportDbConnection?'Report ✓':''}</td>
+      <td><button type="button" class="small ghost" data-toggle-env-credentials="${e.id}">${expanded ? 'Hide credentials ▾' : 'Credentials ▸'}</button></td>
     </tr>
-  `).join('');
+    ${credsBlock}
+    `;
+  }).join('');
   return `
     <div class="panel">
       <h3>Environment Targets</h3>
@@ -2079,10 +2166,144 @@ function renderEnvironments(){
         <div class="actions-row"><button type="button" id="saveEnvironmentBtn">Save environment</button></div>
       ` : ''}
       <table style="margin-top:14px;">
-        <thead><tr><th>Name</th><th>Type</th><th>App URL</th><th>DB connections</th></tr></thead>
-        <tbody>${rows || '<tr><td colspan="4" class="empty">No environments yet.</td></tr>'}</tbody>
+        <thead><tr><th>Name</th><th>Type</th><th>App URL</th><th>DB connections</th><th></th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="5" class="empty">No environments yet.</td></tr>'}</tbody>
       </table>
       <div class="actions-row"><button type="button" class="ghost" id="closeEnvironments">Close</button></div>
+    </div>
+  `;
+}
+
+// ---------------- Module repo links (which real GitHub/ADO repo backs a module) ----------------
+async function loadModuleRepoLinks(moduleId){
+  state.repoLinksLoading = true; render();
+  try{ DATA.moduleRepoLinks[moduleId] = await apiFetch('/api/modules/' + moduleId + '/repo-links'); }
+  catch(err){ showToast('Could not load repo links: ' + err.message, 'error'); }
+  state.repoLinksLoading = false; render();
+}
+async function createModuleRepoLink(moduleId, payload){
+  try{
+    const created = await apiFetch('/api/modules/' + moduleId + '/repo-links', { method:'POST', body: JSON.stringify(payload) });
+    DATA.moduleRepoLinks[moduleId] = (DATA.moduleRepoLinks[moduleId]||[]).concat([created]);
+    state.showAddRepoLink = false;
+    render();
+    showToast('Repo link saved.', 'success');
+  } catch(err){ showToast('Could not save repo link: ' + err.message, 'error'); }
+}
+async function deleteModuleRepoLink(moduleId, id){
+  if(!confirm('Delete this repo link?')) return;
+  try{
+    await apiFetch('/api/modules/' + moduleId + '/repo-links/' + id, { method:'DELETE' });
+    DATA.moduleRepoLinks[moduleId] = (DATA.moduleRepoLinks[moduleId]||[]).filter(l => l.id !== id);
+    render();
+    showToast('Repo link deleted.', 'success');
+  } catch(err){ showToast('Could not delete repo link: ' + err.message, 'error'); }
+}
+function renderRepoLinks(){
+  const moduleId = state.repoLinksModuleId;
+  const links = moduleId ? (DATA.moduleRepoLinks[moduleId] || []) : [];
+  const rows = links.map(l => `
+    <tr>
+      <td>${escapeHtml(l.layer)}</td>
+      <td>${escapeHtml(l.repoHost)}</td>
+      <td>${escapeHtml(l.orgOrAccount)}${l.project ? ' / ' + escapeHtml(l.project) : ''}</td>
+      <td>${escapeHtml(l.repoName)}<br><small class="muted">${escapeHtml(l.branch)}${l.basePath ? ' — ' + escapeHtml(l.basePath) : ''}</small></td>
+      <td>${l.hasAccessToken ? '✓' : ''}</td>
+      <td><button type="button" class="small danger" data-delete-repolink="${l.id}">Delete</button></td>
+    </tr>
+  `).join('');
+  return `
+    <div class="panel">
+      <h3>Repo Links</h3>
+      <p class="sub" style="margin-top:-6px;">Tells the AI-generation flow WHERE a module's real source code lives — a module can have one link per layer (Frontend/Backend/Database). The access token is read-only and never shown again after saving.</p>
+      <div class="field" style="max-width:320px;"><label>Module</label>
+        <select id="repoLinksModuleSelect">
+          <option value="">Select a module…</option>
+          ${(DATA.modules||[]).map(m => `<option value="${m.id}" ${String(m.id)===String(moduleId)?'selected':''}>${escapeHtml(m.name)} (${escapeHtml(m.code)})</option>`).join('')}
+        </select>
+      </div>
+      ${!moduleId ? '' : `
+        ${canEditContent() ? `<div class="actions-row"><button type="button" class="secondary small" id="toggleAddRepoLink">${state.showAddRepoLink ? 'Cancel' : '+ Add repo link'}</button></div>` : ''}
+        ${state.showAddRepoLink ? `
+          <div class="grid2">
+            <div class="field"><label>Layer</label><select id="repoLinkLayer"><option value="Backend">Backend</option><option value="Frontend">Frontend</option><option value="Database">Database</option><option value="Unspecified">Unspecified</option></select></div>
+            <div class="field"><label>Host</label><select id="repoLinkHost"><option value="AzureDevOps">Azure DevOps</option><option value="GitHub">GitHub</option></select></div>
+            <div class="field"><label>Org / Account</label><input type="text" id="repoLinkOrg" placeholder="e.g. flick2know or FieldAssist"></div>
+            <div class="field"><label>Project (Azure DevOps only)</label><input type="text" id="repoLinkProject" placeholder="e.g. Field_Assist"></div>
+            <div class="field"><label>Repo name</label><input type="text" id="repoLinkRepo" placeholder="e.g. FA_Dashboard_APIs"></div>
+            <div class="field"><label>Branch</label><input type="text" id="repoLinkBranch" placeholder="main" value="main"></div>
+            <div class="field"><label>Base path (optional)</label><input type="text" id="repoLinkBasePath" placeholder="/FADashboard.Core"></div>
+            <div class="field"><label>Access token (read-only PAT)</label><input type="password" id="repoLinkToken"></div>
+          </div>
+          <div class="actions-row"><button type="button" id="saveRepoLinkBtn">Save repo link</button></div>
+        ` : ''}
+        <table style="margin-top:14px;">
+          <thead><tr><th>Layer</th><th>Host</th><th>Org/Project</th><th>Repo</th><th>Token set</th><th></th></tr></thead>
+          <tbody>${state.repoLinksLoading ? '<tr><td colspan="6" class="empty">Loading…</td></tr>' : (rows || '<tr><td colspan="6" class="empty">No repo linked to this module yet.</td></tr>')}</tbody>
+        </table>
+      `}
+      <div class="actions-row"><button type="button" class="ghost" id="closeRepoLinks">Close</button></div>
+    </div>
+  `;
+}
+
+// ---------------- Automation scripts (AI-generated, saved in Test Case Hub itself) ----------------
+async function loadAutomationScripts(){
+  if(!state.automationScriptsModuleId){ DATA.automationScripts = []; render(); return; }
+  state.automationScriptsLoading = true; render();
+  try{
+    let q = '?moduleId=' + encodeURIComponent(state.automationScriptsModuleId);
+    if(state.automationScriptsTestCaseId.trim()) q += '&testCaseId=' + encodeURIComponent(state.automationScriptsTestCaseId.trim());
+    DATA.automationScripts = await apiFetch('/api/automation-scripts' + q);
+  } catch(err){ showToast('Could not load automation scripts: ' + err.message, 'error'); }
+  state.automationScriptsLoading = false; render();
+}
+async function updateAutomationScriptStatus(id, status){
+  try{
+    const updated = await apiFetch('/api/automation-scripts/' + id + '/status', { method:'PATCH', body: JSON.stringify({ status }) });
+    DATA.automationScripts = DATA.automationScripts.map(s => s.id === id ? updated : s);
+    render();
+    showToast('Script status set to ' + status + '.', 'success');
+  } catch(err){ showToast('Could not update status: ' + err.message, 'error'); }
+}
+function renderAutomationScripts(){
+  const rows = (DATA.automationScripts||[]).map(s => `
+    <tr>
+      <td>${escapeHtml(s.fileName)}<br><small class="muted">${escapeHtml(s.testCaseId||'')}</small></td>
+      <td>${escapeHtml(s.framework||'')}</td>
+      <td>v${s.version}</td>
+      <td>
+        ${canEditContent() ? `
+          <select data-script-status="${s.id}">
+            <option value="Draft" ${s.status==='Draft'?'selected':''}>Draft</option>
+            <option value="Reviewed" ${s.status==='Reviewed'?'selected':''}>Reviewed</option>
+            <option value="Approved" ${s.status==='Approved'?'selected':''}>Approved</option>
+          </select>
+        ` : `<span class="badge b-active">${escapeHtml(s.status)}</span>`}
+      </td>
+      <td>${escapeHtml(s.generatedBy||'')}</td>
+      <td><button type="button" class="small ghost" data-view-script="${s.id}">${state.viewingScriptId===s.id?'Hide':'View'}</button></td>
+    </tr>
+    ${state.viewingScriptId===s.id ? `<tr><td colspan="6"><textarea readonly style="width:100%;min-height:220px;font-family:monospace;font-size:12px;">${escapeHtml(s.content)}</textarea></td></tr>` : ''}
+  `).join('');
+  return `
+    <div class="panel">
+      <h3>Automation Scripts</h3>
+      <p class="sub" style="margin-top:-6px;">Scripts generated by Claude (via MCP, using a module's Repo Link + its descriptive test cases) and saved here — company/module/test-case scoped, never pushed to the company's own repo. This panel browses and reviews them; generation itself happens in a connected Claude session.</p>
+      <div class="grid2" style="max-width:520px;">
+        <div class="field"><label>Module</label>
+          <select id="automationScriptsModuleSelect">
+            <option value="">Select a module…</option>
+            ${(DATA.modules||[]).map(m => `<option value="${m.id}" ${String(m.id)===String(state.automationScriptsModuleId)?'selected':''}>${escapeHtml(m.name)} (${escapeHtml(m.code)})</option>`).join('')}
+          </select>
+        </div>
+        <div class="field"><label>Test case ID (optional)</label><input type="text" id="automationScriptsTestCaseId" placeholder="e.g. TC-UWMC-DSH-012" value="${escapeHtml(state.automationScriptsTestCaseId)}"></div>
+      </div>
+      <table style="margin-top:14px;">
+        <thead><tr><th>File</th><th>Framework</th><th>Version</th><th>Status</th><th>Generated by</th><th></th></tr></thead>
+        <tbody>${!state.automationScriptsModuleId ? '<tr><td colspan="6" class="empty">Select a module to see its saved scripts.</td></tr>' : (state.automationScriptsLoading ? '<tr><td colspan="6" class="empty">Loading…</td></tr>' : (rows || '<tr><td colspan="6" class="empty">No scripts saved for this module yet.</td></tr>'))}</tbody>
+      </table>
+      <div class="actions-row"><button type="button" class="ghost" id="closeAutomationScripts">Close</button></div>
     </div>
   `;
 }
@@ -2404,6 +2625,8 @@ function renderSidebar(){
       <div class="sidebar-item menu-item sub-item" id="menuReports" title="Reports"><span class="item-icon">📊</span><span class="item-text">Reports</span></div>
       ${(AUTH && effectiveRole() === 'Admin') ? `<div class="sidebar-item menu-item sub-item" id="menuApiKeys" title="API Keys"><span class="item-icon">🔑</span><span class="item-text">API Keys</span></div>` : ''}
       ${(AUTH && effectiveRole() === 'Admin') ? `<div class="sidebar-item menu-item sub-item" id="menuEnvironments" title="Environment Targets"><span class="item-icon">🌐</span><span class="item-text">Environment Targets</span></div>` : ''}
+      ${(AUTH && effectiveRole() === 'Admin') ? `<div class="sidebar-item menu-item sub-item" id="menuRepoLinks" title="Repo Links"><span class="item-icon">🔗</span><span class="item-text">Repo Links</span></div>` : ''}
+      <div class="sidebar-item menu-item sub-item" id="menuAutomationScripts" title="Automation Scripts"><span class="item-icon">🧬</span><span class="item-text">Automation Scripts</span></div>
       ` : ''}
       ` : ''}
       ${(AUTH && effectiveRole() === 'Admin') ? `
@@ -3354,6 +3577,105 @@ function wireEvents(){
       requiresTestDataCleanup: document.getElementById('envRequiresCleanup').checked
     });
   });
+
+  // ---------------- Environment execution credentials ----------------
+  document.querySelectorAll('[data-toggle-env-credentials]').forEach(el => el.addEventListener('click', () => {
+    const envId = Number(el.dataset.toggleEnvCredentials);
+    const next = state.expandedEnvId === envId ? null : envId;
+    state.expandedEnvId = next;
+    state.showAddCredential = false;
+    render();
+    if(next !== null) loadEnvironmentCredentials(next);
+  }));
+  document.querySelectorAll('[data-toggle-add-credential]').forEach(el => el.addEventListener('click', () => {
+    state.showAddCredential = !state.showAddCredential;
+    render();
+  }));
+  document.querySelectorAll('[data-save-credential]').forEach(el => el.addEventListener('click', () => {
+    const envId = Number(el.dataset.saveCredential);
+    const label = document.getElementById('credLabel_' + envId).value.trim();
+    const password = document.getElementById('credPassword_' + envId).value;
+    if(!label){ showToast('Label is required.', 'error'); return; }
+    if(!password){ showToast('Password is required.', 'error'); return; }
+    createEnvironmentCredential(envId, {
+      label,
+      email: document.getElementById('credEmail_' + envId).value.trim(),
+      password,
+      tag: document.getElementById('credTag_' + envId).value.trim()
+    });
+  }));
+  document.querySelectorAll('[data-delete-credential]').forEach(el => el.addEventListener('click', () => {
+    deleteEnvironmentCredential(Number(el.dataset.credEnv), Number(el.dataset.deleteCredential));
+  }));
+
+  // ---------------- Module repo links ----------------
+  const menuRepoLinks = document.getElementById('menuRepoLinks');
+  if(menuRepoLinks) menuRepoLinks.addEventListener('click', () => {
+    const next = !state.showRepoLinks;
+    closeAllPanels();
+    state.showRepoLinks = next;
+    render();
+  });
+  const closeRepoLinks = document.getElementById('closeRepoLinks');
+  if(closeRepoLinks) closeRepoLinks.addEventListener('click', () => { state.showRepoLinks = false; render(); });
+  const repoLinksModuleSelect = document.getElementById('repoLinksModuleSelect');
+  if(repoLinksModuleSelect) repoLinksModuleSelect.addEventListener('change', (e) => {
+    state.repoLinksModuleId = e.target.value;
+    state.showAddRepoLink = false;
+    render();
+    if(state.repoLinksModuleId) loadModuleRepoLinks(state.repoLinksModuleId);
+  });
+  const toggleAddRepoLink = document.getElementById('toggleAddRepoLink');
+  if(toggleAddRepoLink) toggleAddRepoLink.addEventListener('click', () => { state.showAddRepoLink = !state.showAddRepoLink; render(); });
+  const saveRepoLinkBtn = document.getElementById('saveRepoLinkBtn');
+  if(saveRepoLinkBtn) saveRepoLinkBtn.addEventListener('click', () => {
+    const repoName = document.getElementById('repoLinkRepo').value.trim();
+    const orgOrAccount = document.getElementById('repoLinkOrg').value.trim();
+    if(!orgOrAccount || !repoName){ showToast('Org/Account and Repo name are required.', 'error'); return; }
+    createModuleRepoLink(state.repoLinksModuleId, {
+      layer: document.getElementById('repoLinkLayer').value,
+      repoHost: document.getElementById('repoLinkHost').value,
+      orgOrAccount,
+      project: document.getElementById('repoLinkProject').value.trim(),
+      repoName,
+      branch: document.getElementById('repoLinkBranch').value.trim() || 'main',
+      basePath: document.getElementById('repoLinkBasePath').value.trim(),
+      accessToken: document.getElementById('repoLinkToken').value || null
+    });
+  });
+  document.querySelectorAll('[data-delete-repolink]').forEach(el => el.addEventListener('click', () => {
+    deleteModuleRepoLink(state.repoLinksModuleId, Number(el.dataset.deleteRepolink));
+  }));
+
+  // ---------------- Automation scripts ----------------
+  const menuAutomationScripts = document.getElementById('menuAutomationScripts');
+  if(menuAutomationScripts) menuAutomationScripts.addEventListener('click', () => {
+    const next = !state.showAutomationScripts;
+    closeAllPanels();
+    state.showAutomationScripts = next;
+    render();
+  });
+  const closeAutomationScripts = document.getElementById('closeAutomationScripts');
+  if(closeAutomationScripts) closeAutomationScripts.addEventListener('click', () => { state.showAutomationScripts = false; render(); });
+  const automationScriptsModuleSelect = document.getElementById('automationScriptsModuleSelect');
+  if(automationScriptsModuleSelect) automationScriptsModuleSelect.addEventListener('change', (e) => {
+    state.automationScriptsModuleId = e.target.value;
+    render();
+    loadAutomationScripts();
+  });
+  const automationScriptsTestCaseId = document.getElementById('automationScriptsTestCaseId');
+  if(automationScriptsTestCaseId) automationScriptsTestCaseId.addEventListener('change', (e) => {
+    state.automationScriptsTestCaseId = e.target.value;
+    loadAutomationScripts();
+  });
+  document.querySelectorAll('[data-view-script]').forEach(el => el.addEventListener('click', () => {
+    const id = Number(el.dataset.viewScript);
+    state.viewingScriptId = state.viewingScriptId === id ? null : id;
+    render();
+  }));
+  document.querySelectorAll('[data-script-status]').forEach(el => el.addEventListener('change', (e) => {
+    updateAutomationScriptStatus(Number(el.dataset.scriptStatus), e.target.value);
+  }));
 
   // ---------------- Duplicate detection ----------------
   const menuDuplicates = document.getElementById('menuDuplicates');
