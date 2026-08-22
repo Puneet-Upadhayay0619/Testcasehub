@@ -35,6 +35,7 @@ public class JsonFileDataStore : IDataStore
         public List<ModuleRepoLink> ModuleRepoLinks { get; set; } = new();
         public List<EnvironmentCredential> EnvironmentCredentials { get; set; } = new();
         public List<AutomationScript> AutomationScripts { get; set; } = new();
+        public List<CompanyAiSettings> CompanyAiSettings { get; set; } = new();
         public List<Company> Companies { get; set; } = new();
         public List<CompanyAdminInvite> CompanyAdminInvites { get; set; } = new();
         public List<Team> Teams { get; set; } = new();
@@ -56,6 +57,7 @@ public class JsonFileDataStore : IDataStore
         public int NextModuleRepoLinkId { get; set; } = 1;
         public int NextEnvironmentCredentialId { get; set; } = 1;
         public int NextAutomationScriptId { get; set; } = 1;
+        public int NextCompanyAiSettingsId { get; set; } = 1;
         public int NextCompanyId { get; set; } = 1;
         public int NextCompanyAdminInviteId { get; set; } = 1;
         public int NextTeamId { get; set; } = 1;
@@ -703,6 +705,27 @@ public class JsonFileDataStore : IDataStore
             script.Status = status;
             await PersistAsync();
             return script;
+        });
+
+    public Task<CompanyAiSettings?> GetCompanyAiSettingsAsync(int companyId) =>
+        WithLockAsync(async () => _data.CompanyAiSettings.FirstOrDefault(a => a.CompanyId == companyId));
+
+    public Task<CompanyAiSettings> UpsertCompanyAiSettingsAsync(CompanyAiSettings settings) =>
+        WithLockAsync(async () =>
+        {
+            var existing = _data.CompanyAiSettings.FirstOrDefault(a => a.CompanyId == settings.CompanyId);
+            if (existing is null)
+            {
+                settings.Id = _data.NextCompanyAiSettingsId++;
+                _data.CompanyAiSettings.Add(settings);
+                await PersistAsync();
+                return settings;
+            }
+            existing.Provider = settings.Provider; existing.Model = settings.Model; existing.Enabled = settings.Enabled;
+            if (!string.IsNullOrEmpty(settings.ApiKeyEncrypted)) existing.ApiKeyEncrypted = settings.ApiKeyEncrypted;
+            existing.UpdatedBy = settings.UpdatedBy; existing.UpdatedAt = DateTime.UtcNow;
+            await PersistAsync();
+            return existing;
         });
 
     // ---- Phase 8: multi-company, teams ----

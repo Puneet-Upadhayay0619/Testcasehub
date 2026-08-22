@@ -19,7 +19,8 @@ namespace TestCaseHub.Api.McpTools;
 public class AutomationScriptMcpTools
 {
     private readonly IDataStore _store;
-    public AutomationScriptMcpTools(IDataStore store) => _store = store;
+    private readonly AutomationGenerationService _generation;
+    public AutomationScriptMcpTools(IDataStore store, AutomationGenerationService generation) { _store = store; _generation = generation; }
 
     private static string DisplayNameOf(ClaimsPrincipal user) =>
         user.FindFirstValue("displayName") ?? user.FindFirstValue(ClaimsIdentity.DefaultNameClaimType) ?? user.FindFirstValue(ClaimTypes.Email) ?? "Unknown";
@@ -116,5 +117,19 @@ public class AutomationScriptMcpTools
         }
 
         return new { script = AutomationScriptResponse.From(script), testCaseUpdate = testCaseUpdateNote };
+    }
+[McpServerTool(Name = "generate_automation_script"),
+     Description("Second AI-generation path (alongside this same MCP being used directly by a connected Claude session): calls Claude SERVER-SIDE using the company's own configured Anthropic API key (see get_ai_settings/save_ai_settings), grounded in real source code fetched from the module's linked repo(s). Requires Lead role or above -- this spends the company's own paid API budget. Fails with a clear error if the company has not configured a key yet; use the MCP-based flow (list_module_repo_links + save_automation_script) instead in that case.")]
+    public async Task<object> GenerateAutomationScript(ClaimsPrincipal user, int moduleId, string testCaseId, [Description("e.g. Playwright-TypeScript (optional)")] string? framework = null, int? companyId = null)
+    {
+        if (!user.CanGenerateAutomationScript())
+            return new { error = "You do not have permission to generate automation scripts (Lead role or above required -- this uses the company's own paid Anthropic API key)." };
+
+        var effective = user.ResolveActingCompanyId(companyId);
+        if (effective is null) return new { error = "SuperAdmin has no single company -- pass companyId explicitly." };
+
+        var outcome = await _generation.GenerateAsync(effective.Value, moduleId, testCaseId, framework, DisplayNameOf(user));
+        if (!outcome.Success) return new { error = outcome.Error, warnings = outcome.Warnings };
+        return new { script = AutomationScriptResponse.From(outcome.Script!), warnings = outcome.Warnings };
     }
 }

@@ -173,6 +173,16 @@ public record EnvironmentCredentialResponse(int Id, int EnvironmentTargetId, str
     );
 }
 
+
+public record SaveCompanyAiSettingsRequest(string? Provider, string? Model, string? ApiKey, bool Enabled);
+public record CompanyAiSettingsResponse(int CompanyId, string Provider, string Model, bool Enabled, bool HasApiKey, string CreatedBy, DateTime CreatedAt, string UpdatedBy, DateTime? UpdatedAt)
+{
+    public static CompanyAiSettingsResponse From(TestCaseHub.Api.Models.CompanyAiSettings a) => new(
+        a.CompanyId, a.Provider, a.Model, a.Enabled, !string.IsNullOrEmpty(a.ApiKeyEncrypted), a.CreatedBy, a.CreatedAt, a.UpdatedBy, a.UpdatedAt
+    );
+}
+public record GenerateAutomationScriptRequest(int ModuleId, string TestCaseId, string? Framework);
+
 public record SaveAutomationScriptRequest(int ModuleId, string? TestCaseId, int? SuiteId, string FileName, string? Framework, string Content, string? GeneratedBy, string? SourceRepoRefs);
 public record UpdateAutomationScriptStatusRequest(string Status);
 public record AutomationScriptResponse(int Id, int CompanyId, int ModuleId, string? TestCaseId, int? SuiteId, string FileName, string Framework, string Content, string Status, string GeneratedBy, DateTime GeneratedAt, int Version, string SourceRepoRefs)

@@ -88,6 +88,17 @@ public static class Permissions
     // Claude generate for their own test case without needing a Lead/Admin to do it for them.
     public static bool CanManageAutomationScripts(this ClaimsPrincipal user) => user.IsAtLeast(Roles.Contributor);
 
+    // Storing the company's own Anthropic API key -- same Admin-and-above bar as every other
+    // secret this app holds (DB connection strings, repo access tokens, environment
+    // credentials).
+    public static bool CanManageAiSettings(this ClaimsPrincipal user) => user.IsAtLeast(Roles.Admin);
+
+    // Actually calling out to Claude to GENERATE a script is a cost-bearing action against the
+    // company's own paid API key -- same Lead-and-above bar as CanTriggerTestRun, distinct from
+    // CanManageAutomationScripts (Contributor+), which only covers saving/editing a script a
+    // human already wrote themselves.
+    public static bool CanGenerateAutomationScript(this ClaimsPrincipal user) => user.IsAtLeast(Roles.Lead);
+
     // --- Company scope (Phase 8) ---
     // Every role except SuperAdmin carries exactly one CompanyId; SuperAdmin carries none
     // (represented as null) because they're not confined to one company at all.

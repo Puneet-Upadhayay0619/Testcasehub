@@ -439,7 +439,7 @@ function fmtDate(iso){ if(!iso) return ''; const d = new Date(iso); return d.toL
 // DATA now mirrors whatever the server most recently returned — it is a cache for rendering,
 // not the source of truth. bootstrap() fills it after login; module selection, history expand,
 // AI-generate and import all refresh the relevant slice after they write to the server.
-let DATA = { modules: [], taskLinks: [], testCases: [], history: [], priorities: PRIORITIES.slice(), statuses: STATUSES.slice(), users: [], invites: [], notifications: [], suites: [], releases: [], testRuns: [], coverage: [], trend: [], apiKeys: [], environments: [], duplicates: [], auditLog: [], companies: [], teams: [], moduleRepoLinks: {}, environmentCredentials: {}, automationScripts: [] };
+let DATA = { modules: [], taskLinks: [], testCases: [], history: [], priorities: PRIORITIES.slice(), statuses: STATUSES.slice(), users: [], invites: [], notifications: [], suites: [], releases: [], testRuns: [], coverage: [], trend: [], apiKeys: [], environments: [], duplicates: [], auditLog: [], companies: [], teams: [], moduleRepoLinks: {}, environmentCredentials: {}, automationScripts: [], aiSettings: null };
 
 let state = {
   showLogin: true,
@@ -540,6 +540,9 @@ let state = {
   automationScriptsModuleId: '',
   automationScriptsTestCaseId: '',
   viewingScriptId: null,
+  automationScriptGenerating: false,
+  showAiSettings: false,
+  aiSettingsLoading: false,
   showDuplicates: false,
   duplicatesLoading: false,
   showBulkEdit: false,
@@ -613,6 +616,7 @@ function closeAllPanels(){
   state.editingRepoLinkId = null;
   state.showAutomationScripts = false;
   state.viewingScriptId = null;
+  state.showAiSettings = false;
   state.showDuplicates = false;
   state.showBulkEdit = false;
   state.showBulkDelete = false;
@@ -1022,6 +1026,7 @@ function render(){
         ${state.showEnvironments ? renderEnvironments() : ''}
         ${state.showRepoLinks ? renderRepoLinks() : ''}
         ${state.showAutomationScripts ? renderAutomationScripts() : ''}
+        ${state.showAiSettings ? renderAiSettings() : ''}
         ${state.showDuplicates ? renderDuplicates() : ''}
         ${state.showBulkEdit ? renderBulkEdit() : ''}
         ${state.showBulkDelete ? renderBulkDelete() : ''}
@@ -1043,7 +1048,7 @@ function renderMainArea(){
 function isAnyPanelOpen(){
   return state.showModuleMaster || state.showAddModule || state.showAddTestCase || !!state.editingId || !!state.showAddTaskLink || state.showExportPicker || state.showImport ||
     state.showManageUsers || state.showInviteLinks || state.showAuditLog || state.showNotifications || state.showSuites || state.showReleases || state.showTestRuns || state.showReports ||
-    state.showApiKeys || state.showEnvironments || state.showRepoLinks || state.showAutomationScripts || state.showDuplicates || state.showBulkEdit || state.showBulkDelete || state.showTeams;
+    state.showApiKeys || state.showEnvironments || state.showRepoLinks || state.showAutomationScripts || state.showAiSettings || state.showDuplicates || state.showBulkEdit || state.showBulkDelete || state.showTeams;
 }
 
 // ---------- Phase 8: SuperAdmin shell + Companies ----------
@@ -1962,15 +1967,15 @@ function renderTestRuns(){
           <div class="field"><label>Release (optional)</label><select id="runRelease"><option value="">None</option>${(DATA.releases||[]).map(r=>`<option value="${r.id}">${escapeHtml(r.name)}</option>`).join('')}</select></div>
           <div class="field"><label>Suite (optional)</label><select id="runSuite"><option value="">None</option>${(DATA.suites||[]).map(s=>`<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('')}</select></div>
           <div class="field"><label>Environment Target (optional)</label><select id="runEnvTarget"><option value="">None</option>${(DATA.environments||[]).map(e=>`<option value="${e.id}" ${String(e.id)===String(state.runFormEnvTargetId)?'selected':''}>${escapeHtml(e.name)} (${escapeHtml(e.environmentType)})</option>`).join('')}</select></div>
-          ${state.runFormEnvTargetId ? `
+          ${(state.runFormEnvTargetId && canSeeAutomationMenu()) ? `
           <div class="field"><label>Run as credential (optional)</label>
             <select id="runCredential">
               <option value="">None</option>
               ${(DATA.environmentCredentials[state.runFormEnvTargetId]||[]).map(c=>`<option value="${c.id}">${escapeHtml(c.label)}${c.tag?' — '+escapeHtml(c.tag):''}</option>`).join('')}
             </select>
-            <p class="sub" style="margin:2px 0 0;">Requires Lead role or above — Team Lead can trigger a run using a stored login without ever seeing its password.</p>
+            <p class="sub" style="margin:2px 0 0;">Team Lead can trigger a run using a stored login without ever seeing its password.</p>
           </div>
-          ` : ''}
+          ` : (state.runFormEnvTargetId ? `<p class="sub">Attaching a saved credential requires Lead role or above.</p>` : '')}
         </div>
         <div class="actions-row"><button type="button" id="saveTestRunBtn">Create test run</button></div>
       ` : ''}
@@ -2277,6 +2282,23 @@ async function updateAutomationScriptStatus(id, status){
     showToast('Script status set to ' + status + '.', 'success');
   } catch(err){ showToast('Could not update status: ' + err.message, 'error'); }
 }
+async function generateAutomationScript(){
+  if(!state.automationScriptsModuleId || !state.automationScriptsTestCaseId.trim()){
+    showToast('Pick a module and enter a test case ID to generate for.', 'error');
+    return;
+  }
+  state.automationScriptGenerating = true; render();
+  try{
+    const res = await apiFetch('/api/automation-scripts/generate', { method:'POST', body: JSON.stringify({
+      moduleId: Number(state.automationScriptsModuleId), testCaseId: state.automationScriptsTestCaseId.trim()
+    }) });
+    (res.warnings||[]).forEach(w => showToast(w, 'error'));
+    showToast('Script generated: ' + res.script.fileName + ' (v' + res.script.version + ').', 'success');
+    await loadAutomationScripts();
+  } catch(err){ showToast('Could not generate script: ' + err.message, 'error'); }
+  state.automationScriptGenerating = false; render();
+}
+
 function renderAutomationScripts(){
   const rows = (DATA.automationScripts||[]).map(s => `
     <tr>
@@ -2300,7 +2322,7 @@ function renderAutomationScripts(){
   return `
     <div class="panel">
       <h3>Automation Scripts</h3>
-      <p class="sub" style="margin-top:-6px;">Scripts generated by Claude (via MCP, using a module's Repo Link + its descriptive test cases) and saved here — company/module/test-case scoped, never pushed to the company's own repo. This panel browses and reviews them; generation itself happens in a connected Claude session.</p>
+      <p class="sub" style="margin-top:-6px;">Two ways a script lands here: (1) a Claude session connected to this MCP + your repo's MCP calls save_automation_script, or (2) the "Generate with Claude" button below calls Claude directly using the company's own Anthropic key (AI Settings). Either way it's stored company/module/test-case scoped, never pushed to the company's own repo.</p>
       <div class="grid2" style="max-width:520px;">
         <div class="field"><label>Module</label>
           <select id="automationScriptsModuleSelect">
@@ -2308,13 +2330,50 @@ function renderAutomationScripts(){
             ${(DATA.modules||[]).map(m => `<option value="${m.id}" ${String(m.id)===String(state.automationScriptsModuleId)?'selected':''}>${escapeHtml(m.name)} (${escapeHtml(m.code)})</option>`).join('')}
           </select>
         </div>
-        <div class="field"><label>Test case ID (optional)</label><input type="text" id="automationScriptsTestCaseId" placeholder="e.g. TC-UWMC-DSH-012" value="${escapeHtml(state.automationScriptsTestCaseId)}"></div>
+        <div class="field"><label>Test case ID</label><input type="text" id="automationScriptsTestCaseId" placeholder="e.g. TC-UWMC-DSH-012" value="${escapeHtml(state.automationScriptsTestCaseId)}"></div>
       </div>
+      ${canSeeAutomationMenu() ? `
+        <div class="actions-row">
+          <button type="button" id="generateScriptBtn" ${state.automationScriptGenerating?'disabled':''}>${state.automationScriptGenerating ? 'Generating…' : 'Generate with Claude (uses company Anthropic key)'}</button>
+        </div>
+        <p class="sub" style="margin-top:-4px;">Requires Lead role or above, and an Anthropic key configured under AI Settings — otherwise use the MCP-based flow instead.</p>
+      ` : ''}
       <table style="margin-top:14px;">
         <thead><tr><th>File</th><th>Framework</th><th>Version</th><th>Status</th><th>Generated by</th><th></th></tr></thead>
         <tbody>${!state.automationScriptsModuleId ? '<tr><td colspan="6" class="empty">Select a module to see its saved scripts.</td></tr>' : (state.automationScriptsLoading ? '<tr><td colspan="6" class="empty">Loading…</td></tr>' : (rows || '<tr><td colspan="6" class="empty">No scripts saved for this module yet.</td></tr>'))}</tbody>
       </table>
       <div class="actions-row"><button type="button" class="ghost" id="closeAutomationScripts">Close</button></div>
+    </div>
+  `;
+}
+
+// ---------------- AI Settings (company's own Anthropic key -- second generation path) ----------------
+async function loadAiSettings(){
+  state.aiSettingsLoading = true; render();
+  try{ DATA.aiSettings = await apiFetch('/api/ai-settings'); } catch(err){ showToast('Could not load AI settings: ' + err.message, 'error'); }
+  state.aiSettingsLoading = false; render();
+}
+async function saveAiSettings(payload){
+  try{
+    DATA.aiSettings = await apiFetch('/api/ai-settings', { method:'POST', body: JSON.stringify(payload) });
+    render();
+    showToast('AI settings saved.', 'success');
+  } catch(err){ showToast('Could not save AI settings: ' + err.message, 'error'); }
+}
+function renderAiSettings(){
+  if(state.aiSettingsLoading) return `<div class="panel"><h3>AI Settings</h3><p class="sub" style="margin-top:-6px;">Loading…</p></div>`;
+  const a = DATA.aiSettings || { provider: 'Anthropic', model: 'claude-sonnet-5', enabled: false, hasApiKey: false };
+  return `
+    <div class="panel">
+      <h3>AI Settings</h3>
+      <p class="sub" style="margin-top:-6px;">Plug in this company's own Anthropic API key so Test Case Hub can generate automation scripts directly (Automation Scripts panel → "Generate with Claude"), without needing an external MCP-connected chat session. The MCP-based flow (a connected Claude session calling save_automation_script) keeps working either way — this is an additional option, not a replacement.</p>
+      <div class="grid2" style="max-width:420px;">
+        <div class="field"><label>Model</label><input type="text" id="aiModel" value="${escapeHtml(a.model)}" placeholder="claude-sonnet-5"></div>
+        <div class="field"><label>Anthropic API key ${a.hasApiKey ? '(a key is saved — leave blank to keep it)' : '(not set)'}</label><input type="password" id="aiApiKey" placeholder="${a.hasApiKey ? '••••••••' : 'sk-ant-...'}"></div>
+      </div>
+      <div class="field"><label><input type="checkbox" id="aiEnabled" ${a.enabled?'checked':''}> Enabled</label></div>
+      <div class="actions-row"><button type="button" id="saveAiSettingsBtn">Save</button></div>
+      <div class="actions-row"><button type="button" class="ghost" id="closeAiSettings">Close</button></div>
     </div>
   `;
 }
@@ -2637,6 +2696,7 @@ function renderSidebar(){
       ${(AUTH && effectiveRole() === 'Admin') ? `<div class="sidebar-item menu-item sub-item" id="menuApiKeys" title="API Keys"><span class="item-icon">🔑</span><span class="item-text">API Keys</span></div>` : ''}
       ${(AUTH && effectiveRole() === 'Admin') ? `<div class="sidebar-item menu-item sub-item" id="menuEnvironments" title="Environment Targets"><span class="item-icon">🌐</span><span class="item-text">Environment Targets</span></div>` : ''}
       ${(AUTH && effectiveRole() === 'Admin') ? `<div class="sidebar-item menu-item sub-item" id="menuRepoLinks" title="Repo Links"><span class="item-icon">🔗</span><span class="item-text">Repo Links</span></div>` : ''}
+      ${(AUTH && effectiveRole() === 'Admin') ? `<div class="sidebar-item menu-item sub-item" id="menuAiSettings" title="AI Settings"><span class="item-icon">🧠</span><span class="item-text">AI Settings</span></div>` : ''}
       <div class="sidebar-item menu-item sub-item" id="menuAutomationScripts" title="Automation Scripts"><span class="item-icon">🧬</span><span class="item-text">Automation Scripts</span></div>
       ` : ''}
       ` : ''}
@@ -3696,6 +3756,28 @@ function wireEvents(){
   document.querySelectorAll('[data-script-status]').forEach(el => el.addEventListener('change', (e) => {
     updateAutomationScriptStatus(Number(el.dataset.scriptStatus), e.target.value);
   }));
+  const generateScriptBtn = document.getElementById('generateScriptBtn');
+  if(generateScriptBtn) generateScriptBtn.addEventListener('click', () => { generateAutomationScript(); });
+
+  // ---------------- AI Settings ----------------
+  const menuAiSettings = document.getElementById('menuAiSettings');
+  if(menuAiSettings) menuAiSettings.addEventListener('click', () => {
+    const next = !state.showAiSettings;
+    closeAllPanels();
+    state.showAiSettings = next;
+    render();
+    if(next) loadAiSettings();
+  });
+  const closeAiSettings = document.getElementById('closeAiSettings');
+  if(closeAiSettings) closeAiSettings.addEventListener('click', () => { state.showAiSettings = false; render(); });
+  const saveAiSettingsBtn = document.getElementById('saveAiSettingsBtn');
+  if(saveAiSettingsBtn) saveAiSettingsBtn.addEventListener('click', () => {
+    saveAiSettings({
+      model: document.getElementById('aiModel').value.trim(),
+      apiKey: document.getElementById('aiApiKey').value || null,
+      enabled: document.getElementById('aiEnabled').checked
+    });
+  });
 
   // ---------------- Duplicate detection ----------------
   const menuDuplicates = document.getElementById('menuDuplicates');

@@ -29,6 +29,7 @@ public class AppDbContext : DbContext
     public DbSet<EnvironmentCredential> EnvironmentCredentials => Set<EnvironmentCredential>();
     public DbSet<ModuleRepoLink> ModuleRepoLinks => Set<ModuleRepoLink>();
     public DbSet<AutomationScript> AutomationScripts => Set<AutomationScript>();
+    public DbSet<CompanyAiSettings> CompanyAiSettings => Set<CompanyAiSettings>();
 
     // Phase 8: multi-company, teams.
     public DbSet<Company> Companies => Set<Company>();
@@ -76,6 +77,8 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<ModuleRepoLink>().HasIndex(l => new { l.ModuleId, l.Layer }).IsUnique();
         modelBuilder.Entity<ModuleRepoLink>()
             .HasOne<Module>().WithMany().HasForeignKey(l => l.ModuleId).OnDelete(DeleteBehavior.Cascade);
+
+        modelBuilder.Entity<CompanyAiSettings>().HasIndex(a => a.CompanyId).IsUnique();
         modelBuilder.Entity<PasswordResetToken>().HasIndex(r => r.TokenHash).IsUnique();
 
         modelBuilder.Entity<Module>()

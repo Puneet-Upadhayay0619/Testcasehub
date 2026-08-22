@@ -74,9 +74,12 @@ builder.Services.AddScoped<RefreshTokenService>();
 builder.Services.AddScoped<TestCaseHub.Api.Services.NotificationService>();
 builder.Services.AddScoped<TestCaseHub.Api.Services.ApiKeyService>();
 builder.Services.AddHttpClient<TestCaseHub.Api.Services.AdoService>();
+builder.Services.AddHttpClient<TestCaseHub.Api.Services.RepoContentService>();
+builder.Services.AddHttpClient<TestCaseHub.Api.Services.AnthropicClient>();
 builder.Services.AddSingleton<IEmailSender, LoggingEmailSender>();
 builder.Services.AddDataProtection();
 builder.Services.AddSingleton<SecretProtector>();
+builder.Services.AddScoped<TestCaseHub.Api.Services.AutomationGenerationService>();
 
 // Rate limiting (Phase 3): partitioned per client IP so one abusive caller can't exhaust the
 // budget for everyone else. 5 attempts / 15 minutes on the auth-sensitive endpoints
@@ -338,6 +341,22 @@ if (storageMode == "SqlServer")
                 ""UpdatedAt"" timestamp with time zone NULL
             );",
             @"CREATE INDEX IF NOT EXISTS ""IX_EnvironmentCredentials_EnvironmentTargetId"" ON ""EnvironmentCredentials"" (""EnvironmentTargetId"");",
+
+            // Company's own Anthropic API key (second AI-generation path, agreed alongside the
+            // existing MCP-based one).
+            @"CREATE TABLE IF NOT EXISTS ""CompanyAiSettings"" (
+                ""Id"" serial PRIMARY KEY,
+                ""CompanyId"" integer NOT NULL,
+                ""Provider"" varchar(32) NOT NULL DEFAULT 'Anthropic',
+                ""Model"" varchar(64) NOT NULL DEFAULT 'claude-sonnet-5',
+                ""ApiKeyEncrypted"" text NOT NULL DEFAULT '',
+                ""Enabled"" boolean NOT NULL DEFAULT true,
+                ""CreatedBy"" varchar(256) NOT NULL DEFAULT '',
+                ""CreatedAt"" timestamp with time zone NOT NULL DEFAULT now(),
+                ""UpdatedBy"" varchar(256) NOT NULL DEFAULT '',
+                ""UpdatedAt"" timestamp with time zone NULL
+            );",
+            @"CREATE UNIQUE INDEX IF NOT EXISTS ""IX_CompanyAiSettings_CompanyId"" ON ""CompanyAiSettings"" (""CompanyId"");",
 
             // Test Run -> named execution credential (agreed in planning: Lead can trigger a run
             // using a stored credential by Label, never seeing the password).

@@ -139,6 +139,9 @@ public interface IDataStore
     Task<AutomationScript> SaveAutomationScriptAsync(AutomationScript script);
     Task<AutomationScript> UpdateAutomationScriptStatusAsync(int id, string status);
 
+    Task<CompanyAiSettings?> GetCompanyAiSettingsAsync(int companyId);
+    Task<CompanyAiSettings> UpsertCompanyAiSettingsAsync(CompanyAiSettings settings);
+
     // ---- Phase 8: multi-company, teams ----
     Task<Company> CreateCompanyAsync(Company company);
     Task<List<Company>> GetCompaniesAsync();

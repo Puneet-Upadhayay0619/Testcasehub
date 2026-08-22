@@ -19,7 +19,8 @@ namespace TestCaseHub.Api.Controllers;
 public class AutomationScriptsController : ControllerBase
 {
     private readonly IDataStore _store;
-    public AutomationScriptsController(IDataStore store) => _store = store;
+    private readonly AutomationGenerationService _generation;
+    public AutomationScriptsController(IDataStore store, AutomationGenerationService generation) { _store = store; _generation = generation; }
 
     private string ActorDisplayName => User.FindFirstValue("displayName") ?? "Unknown";
 
@@ -104,5 +105,21 @@ public class AutomationScriptsController : ControllerBase
         }
 
         return Ok(AutomationScriptResponse.From(script));
+    }
+// "Direct API" generation path (agreed alongside the existing MCP-based one): calls Claude
+    // server-side using the company's own Anthropic key (CompanyAiSettingsController), grounded
+    // in real source code fetched from the module's linked repo(s). Lead-and-above only -- this
+    // spends the company's own paid API budget, a materially different bar than manually
+    // pasting in a script you already wrote (CanManageAutomationScripts, Contributor+).
+    [HttpPost("generate")]
+    public async Task<ActionResult> Generate(GenerateAutomationScriptRequest req, [FromQuery] int? companyId = null)
+    {
+        if (!User.CanGenerateAutomationScript()) return Forbid();
+        var effective = User.ResolveActingCompanyId(companyId);
+        if (effective is null) return User.IsSuperAdmin() ? BadRequest("SuperAdmin must specify ?companyId=.") : Forbid();
+
+        var outcome = await _generation.GenerateAsync(effective.Value, req.ModuleId, req.TestCaseId, req.Framework, ActorDisplayName);
+        if (!outcome.Success) return BadRequest(new { error = outcome.Error, warnings = outcome.Warnings });
+        return Ok(new { script = AutomationScriptResponse.From(outcome.Script!), warnings = outcome.Warnings });
     }
 }

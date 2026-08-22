@@ -215,6 +215,18 @@ public class EfCoreDataStore : IDataStore
         return script;
     }
 
+    public Task<CompanyAiSettings?> GetCompanyAiSettingsAsync(int companyId) => _db.CompanyAiSettings.FirstOrDefaultAsync(a => a.CompanyId == companyId);
+    public async Task<CompanyAiSettings> UpsertCompanyAiSettingsAsync(CompanyAiSettings settings)
+    {
+        var existing = await _db.CompanyAiSettings.FirstOrDefaultAsync(a => a.CompanyId == settings.CompanyId);
+        if (existing is null) { _db.CompanyAiSettings.Add(settings); await _db.SaveChangesAsync(); return settings; }
+        existing.Provider = settings.Provider; existing.Model = settings.Model; existing.Enabled = settings.Enabled;
+        if (!string.IsNullOrEmpty(settings.ApiKeyEncrypted)) existing.ApiKeyEncrypted = settings.ApiKeyEncrypted;
+        existing.UpdatedBy = settings.UpdatedBy; existing.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync();
+        return existing;
+    }
+
     // ---- Phase 8: multi-company, teams ----
     public async Task<Company> CreateCompanyAsync(Company company) { _db.Companies.Add(company); await _db.SaveChangesAsync(); return company; }
     public Task<List<Company>> GetCompaniesAsync() => _db.Companies.OrderBy(c => c.Name).ToListAsync();
