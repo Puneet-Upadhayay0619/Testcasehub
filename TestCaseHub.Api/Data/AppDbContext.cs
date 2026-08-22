@@ -26,6 +26,9 @@ public class AppDbContext : DbContext
     public DbSet<Notification> Notifications => Set<Notification>();
     public DbSet<ApiKey> ApiKeys => Set<ApiKey>();
     public DbSet<EnvironmentTarget> EnvironmentTargets => Set<EnvironmentTarget>();
+    public DbSet<EnvironmentCredential> EnvironmentCredentials => Set<EnvironmentCredential>();
+    public DbSet<ModuleRepoLink> ModuleRepoLinks => Set<ModuleRepoLink>();
+    public DbSet<AutomationScript> AutomationScripts => Set<AutomationScript>();
 
     // Phase 8: multi-company, teams.
     public DbSet<Company> Companies => Set<Company>();
@@ -62,6 +65,17 @@ public class AppDbContext : DbContext
             : "[RunAttemptKey] IS NOT NULL";
         modelBuilder.Entity<TestRunResult>().HasIndex(r => r.RunAttemptKey).IsUnique().HasFilter(runAttemptKeyFilter);
         modelBuilder.Entity<ApiKey>().HasIndex(k => k.KeyHash).IsUnique();
+
+        // EnvironmentCredential is a child collection of EnvironmentTarget (Phase: automation
+        // credentials) -- deleting an environment target takes its named logins with it.
+        modelBuilder.Entity<EnvironmentCredential>()
+            .HasOne<EnvironmentTarget>().WithMany().HasForeignKey(c => c.EnvironmentTargetId).OnDelete(DeleteBehavior.Cascade);
+
+        // A module can have several repo links (one per layer: Frontend/Backend/Database) but
+        // never two for the exact same layer -- that would just be an edit, not a new link.
+        modelBuilder.Entity<ModuleRepoLink>().HasIndex(l => new { l.ModuleId, l.Layer }).IsUnique();
+        modelBuilder.Entity<ModuleRepoLink>()
+            .HasOne<Module>().WithMany().HasForeignKey(l => l.ModuleId).OnDelete(DeleteBehavior.Cascade);
         modelBuilder.Entity<PasswordResetToken>().HasIndex(r => r.TokenHash).IsUnique();
 
         modelBuilder.Entity<Module>()

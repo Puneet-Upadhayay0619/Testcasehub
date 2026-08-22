@@ -55,4 +55,81 @@ public class EnvironmentsController : ControllerBase
         env = await _store.CreateEnvironmentTargetAsync(env);
         return EnvironmentTargetResponse.From(env);
     }
+
+    // --- Named execution credentials (agreed in planning): an environment often needs several
+    // distinct logins (a plain admin, a non-Modern-Trade company's admin, a second company for
+    // isolation checks) -- exactly what the UWMC automation project itself needed. Configuring
+    // one is Admin-only (CanConfigureAutomationCredentials); TRIGGERING a run that uses one
+    // only requires CanTriggerTestRun (Lead+, see TestRunsController) -- a Lead picks by Label,
+    // never sees the plaintext password. ---
+
+    [HttpGet("{environmentTargetId:int}/credentials")]
+    public async Task<ActionResult<List<EnvironmentCredentialResponse>>> GetCredentials(int environmentTargetId)
+    {
+        var env = await _store.GetEnvironmentTargetAsync(environmentTargetId);
+        if (env is null) return NotFound("Environment target not found.");
+        if (!User.HasCompanyAccess(env.CompanyId)) return Forbid();
+        // Anyone who can at least trigger a run needs to see the list of Labels to pick from --
+        // the response never includes the password itself (see EnvironmentCredentialResponse).
+        if (!User.CanTriggerTestRun()) return Forbid();
+
+        var creds = await _store.GetEnvironmentCredentialsAsync(environmentTargetId);
+        return creds.Select(EnvironmentCredentialResponse.From).ToList();
+    }
+
+    [HttpPost("{environmentTargetId:int}/credentials")]
+    public async Task<ActionResult<EnvironmentCredentialResponse>> CreateCredential(int environmentTargetId, CreateEnvironmentCredentialRequest req)
+    {
+        if (!User.CanConfigureAutomationCredentials()) return Forbid();
+
+        var env = await _store.GetEnvironmentTargetAsync(environmentTargetId);
+        if (env is null) return NotFound("Environment target not found.");
+        if (!User.HasCompanyAccess(env.CompanyId)) return Forbid();
+
+        if (string.IsNullOrWhiteSpace(req.Label)) return BadRequest("Label is required.");
+        if (string.IsNullOrWhiteSpace(req.Password)) return BadRequest("Password is required.");
+
+        var cred = new EnvironmentCredential
+        {
+            EnvironmentTargetId = environmentTargetId, Label = req.Label.Trim(),
+            Email = req.Email?.Trim() ?? "", Tag = req.Tag?.Trim() ?? "",
+            PasswordEncrypted = _protector.Protect(req.Password), CreatedBy = ActorDisplayName
+        };
+        cred = await _store.CreateEnvironmentCredentialAsync(cred);
+        return Ok(EnvironmentCredentialResponse.From(cred));
+    }
+
+    [HttpPut("{environmentTargetId:int}/credentials/{id:int}")]
+    public async Task<ActionResult<EnvironmentCredentialResponse>> UpdateCredential(int environmentTargetId, int id, CreateEnvironmentCredentialRequest req)
+    {
+        if (!User.CanConfigureAutomationCredentials()) return Forbid();
+
+        var cred = await _store.GetEnvironmentCredentialAsync(id);
+        if (cred is null || cred.EnvironmentTargetId != environmentTargetId) return NotFound("Credential not found.");
+        var env = await _store.GetEnvironmentTargetAsync(environmentTargetId);
+        if (env is null || !User.HasCompanyAccess(env.CompanyId)) return Forbid();
+
+        if (string.IsNullOrWhiteSpace(req.Label)) return BadRequest("Label is required.");
+        cred.Label = req.Label.Trim(); cred.Email = req.Email?.Trim() ?? ""; cred.Tag = req.Tag?.Trim() ?? "";
+        // Only rotate the password if a new one was actually supplied.
+        if (!string.IsNullOrWhiteSpace(req.Password)) cred.PasswordEncrypted = _protector.Protect(req.Password);
+        cred.UpdatedBy = ActorDisplayName; cred.UpdatedAt = DateTime.UtcNow;
+
+        cred = await _store.UpdateEnvironmentCredentialAsync(cred);
+        return Ok(EnvironmentCredentialResponse.From(cred));
+    }
+
+    [HttpDelete("{environmentTargetId:int}/credentials/{id:int}")]
+    public async Task<ActionResult> DeleteCredential(int environmentTargetId, int id)
+    {
+        if (!User.CanConfigureAutomationCredentials()) return Forbid();
+
+        var cred = await _store.GetEnvironmentCredentialAsync(id);
+        if (cred is null || cred.EnvironmentTargetId != environmentTargetId) return NotFound("Credential not found.");
+        var env = await _store.GetEnvironmentTargetAsync(environmentTargetId);
+        if (env is null || !User.HasCompanyAccess(env.CompanyId)) return Forbid();
+
+        await _store.DeleteEnvironmentCredentialAsync(id);
+        return NoContent();
+    }
 }

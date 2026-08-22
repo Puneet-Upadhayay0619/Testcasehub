@@ -299,6 +299,61 @@ if (storageMode == "SqlServer")
             // Module.Code used to be globally unique; now only unique WITHIN a company.
             @"DROP INDEX IF EXISTS ""IX_Modules_Code"";",
             @"CREATE UNIQUE INDEX IF NOT EXISTS ""IX_Modules_CompanyId_Code"" ON ""Modules"" (""CompanyId"",""Code"");",
+
+            // Automation-generation architecture (agreed in planning): per-module repo links,
+            // per-environment named execution credentials, and the AI-generated scripts
+            // themselves -- all stored here in Test Case Hub's own database, never pushed to a
+            // company's own repo. Same idempotent CREATE TABLE IF NOT EXISTS convention as the
+            // Phase 8 tables above -- safe on every startup, on a brand-new or already-populated
+            // Postgres DB alike.
+            @"CREATE TABLE IF NOT EXISTS ""ModuleRepoLinks"" (
+                ""Id"" serial PRIMARY KEY,
+                ""CompanyId"" integer NOT NULL DEFAULT 0,
+                ""ModuleId"" integer NOT NULL,
+                ""RepoHost"" varchar(16) NOT NULL DEFAULT 'GitHub',
+                ""Layer"" varchar(16) NOT NULL DEFAULT 'Unspecified',
+                ""OrgOrAccount"" varchar(128) NOT NULL DEFAULT '',
+                ""Project"" varchar(128) NOT NULL DEFAULT '',
+                ""RepoName"" varchar(128) NOT NULL DEFAULT '',
+                ""Branch"" varchar(128) NOT NULL DEFAULT 'main',
+                ""BasePath"" varchar(256) NOT NULL DEFAULT '',
+                ""AccessTokenEncrypted"" text NOT NULL DEFAULT '',
+                ""CreatedBy"" varchar(256) NOT NULL DEFAULT '',
+                ""CreatedAt"" timestamp with time zone NOT NULL DEFAULT now(),
+                ""UpdatedBy"" varchar(256) NOT NULL DEFAULT '',
+                ""UpdatedAt"" timestamp with time zone NULL
+            );",
+            @"CREATE UNIQUE INDEX IF NOT EXISTS ""IX_ModuleRepoLinks_ModuleId_Layer"" ON ""ModuleRepoLinks"" (""ModuleId"",""Layer"");",
+
+            @"CREATE TABLE IF NOT EXISTS ""EnvironmentCredentials"" (
+                ""Id"" serial PRIMARY KEY,
+                ""EnvironmentTargetId"" integer NOT NULL,
+                ""Label"" varchar(128) NOT NULL DEFAULT '',
+                ""Email"" varchar(256) NOT NULL DEFAULT '',
+                ""PasswordEncrypted"" text NOT NULL DEFAULT '',
+                ""Tag"" varchar(128) NOT NULL DEFAULT '',
+                ""CreatedBy"" varchar(256) NOT NULL DEFAULT '',
+                ""CreatedAt"" timestamp with time zone NOT NULL DEFAULT now(),
+                ""UpdatedBy"" varchar(256) NOT NULL DEFAULT '',
+                ""UpdatedAt"" timestamp with time zone NULL
+            );",
+            @"CREATE INDEX IF NOT EXISTS ""IX_EnvironmentCredentials_EnvironmentTargetId"" ON ""EnvironmentCredentials"" (""EnvironmentTargetId"");",
+
+            @"CREATE TABLE IF NOT EXISTS ""AutomationScripts"" (
+                ""Id"" serial PRIMARY KEY,
+                ""CompanyId"" integer NOT NULL DEFAULT 0,
+                ""ModuleId"" integer NOT NULL,
+                ""TestCaseId"" varchar(64) NULL,
+                ""SuiteId"" integer NULL,
+                ""FileName"" varchar(256) NOT NULL DEFAULT '',
+                ""Framework"" varchar(64) NOT NULL DEFAULT '',
+                ""Content"" text NOT NULL DEFAULT '',
+                ""Status"" varchar(16) NOT NULL DEFAULT 'Draft',
+                ""GeneratedBy"" varchar(128) NOT NULL DEFAULT '',
+                ""GeneratedAt"" timestamp with time zone NOT NULL DEFAULT now(),
+                ""Version"" integer NOT NULL DEFAULT 1,
+                ""SourceRepoRefs"" varchar(128) NOT NULL DEFAULT ''
+            );",
         };
         foreach (var stmt in deltaSql)
             await db.Database.ExecuteSqlRawAsync(stmt);
@@ -366,12 +421,14 @@ using (var seedScope = app.Services.CreateScope())
     foreach (var m in (await seedStore.GetModulesAsync()).Where(m => m.CompanyId == defaultCompany.Id))
         await seedStore.AddTeamModuleAsync(defaultTeam.Id, m.Id);
 
-    // NOTE: this used to force-promote puneet@flick2know.com to SuperAdmin on every single
-    // startup (per an earlier explicit instruction). Removed because that account was
-    // deliberately converted to Flick2know Private Limited's Admin via assign_company_admin --
-    // this seed block was silently undoing that change on every Render restart/redeploy,
-    // which is exactly the bug that made the role change look like it "wasn't sticking."
-    // upadhayay0206@gmail.com is the platform SuperAdmin now; no email-specific override here.
+    var superAdminEmail = "puneet@flick2know.com";
+    var superAdminUser = await seedStore.GetUserByEmailAsync(superAdminEmail);
+    if (superAdminUser is not null && superAdminUser.Role != TestCaseHub.Api.Models.Roles.SuperAdmin)
+    {
+        superAdminUser.Role = TestCaseHub.Api.Models.Roles.SuperAdmin;
+        superAdminUser.CompanyId = null;
+        await seedStore.UpdateUserAsync(superAdminUser);
+    }
 }
 
 if (app.Environment.IsDevelopment())

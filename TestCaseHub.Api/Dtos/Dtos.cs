@@ -153,6 +153,35 @@ public record EnvironmentTargetResponse(int Id, string Name, string Tenant, stri
 public record RecordAutomatedResultRequest(string TestCaseId, string? Platform, string Status, string? Notes, string RunAttemptKey, int RetryCount);
 public record CreateBugFromResultResponse(bool Success, string? WorkItemId, string? WorkItemUrl, string? Error);
 
+// ---- Automation-generation architecture: repo links, per-environment credentials, generated
+// scripts (agreed in planning) ----
+
+public record CreateModuleRepoLinkRequest(string RepoHost, string Layer, string OrgOrAccount, string? Project, string RepoName, string? Branch, string? BasePath, string? AccessToken);
+public record ModuleRepoLinkResponse(int Id, int ModuleId, string RepoHost, string Layer, string OrgOrAccount, string Project, string RepoName, string Branch, string BasePath, bool HasAccessToken, string CreatedBy, DateTime CreatedAt, string UpdatedBy, DateTime? UpdatedAt)
+{
+    public static ModuleRepoLinkResponse From(TestCaseHub.Api.Models.ModuleRepoLink l) => new(
+        l.Id, l.ModuleId, l.RepoHost, l.Layer, l.OrgOrAccount, l.Project, l.RepoName, l.Branch, l.BasePath,
+        !string.IsNullOrEmpty(l.AccessTokenEncrypted), l.CreatedBy, l.CreatedAt, l.UpdatedBy, l.UpdatedAt
+    );
+}
+
+public record CreateEnvironmentCredentialRequest(string Label, string? Email, string Password, string? Tag);
+public record EnvironmentCredentialResponse(int Id, int EnvironmentTargetId, string Label, string Email, string Tag, bool HasPassword, string CreatedBy, DateTime CreatedAt, string UpdatedBy, DateTime? UpdatedAt)
+{
+    public static EnvironmentCredentialResponse From(TestCaseHub.Api.Models.EnvironmentCredential c) => new(
+        c.Id, c.EnvironmentTargetId, c.Label, c.Email, c.Tag, !string.IsNullOrEmpty(c.PasswordEncrypted), c.CreatedBy, c.CreatedAt, c.UpdatedBy, c.UpdatedAt
+    );
+}
+
+public record SaveAutomationScriptRequest(int ModuleId, string? TestCaseId, int? SuiteId, string FileName, string? Framework, string Content, string? GeneratedBy, string? SourceRepoRefs);
+public record UpdateAutomationScriptStatusRequest(string Status);
+public record AutomationScriptResponse(int Id, int CompanyId, int ModuleId, string? TestCaseId, int? SuiteId, string FileName, string Framework, string Content, string Status, string GeneratedBy, DateTime GeneratedAt, int Version, string SourceRepoRefs)
+{
+    public static AutomationScriptResponse From(TestCaseHub.Api.Models.AutomationScript s) => new(
+        s.Id, s.CompanyId, s.ModuleId, s.TestCaseId, s.SuiteId, s.FileName, s.Framework, s.Content, s.Status, s.GeneratedBy, s.GeneratedAt, s.Version, s.SourceRepoRefs
+    );
+}
+
 // ---- Phase 8: multi-company, teams ----
 public record UpdateCompanyStatusRequest(string Status);
 

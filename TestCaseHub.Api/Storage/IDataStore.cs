@@ -116,6 +116,29 @@ public interface IDataStore
     Task<EnvironmentTarget> CreateEnvironmentTargetAsync(EnvironmentTarget env);
     Task<EnvironmentTarget> UpdateEnvironmentTargetAsync(EnvironmentTarget env);
 
+    // ---- Automation-generation architecture: repo links, per-environment credentials,
+    // generated scripts (agreed in planning; see Models/ModuleRepoLink.cs, Models/
+    // EnvironmentCredential.cs, Models/AutomationScript.cs for the "why") ----
+    Task<List<ModuleRepoLink>> GetModuleRepoLinksAsync(int moduleId);
+    Task<ModuleRepoLink?> GetModuleRepoLinkAsync(int id);
+    Task<ModuleRepoLink> CreateModuleRepoLinkAsync(ModuleRepoLink link);
+    Task<ModuleRepoLink> UpdateModuleRepoLinkAsync(ModuleRepoLink link);
+    Task<bool> DeleteModuleRepoLinkAsync(int id);
+
+    Task<List<EnvironmentCredential>> GetEnvironmentCredentialsAsync(int environmentTargetId);
+    Task<EnvironmentCredential?> GetEnvironmentCredentialAsync(int id);
+    Task<EnvironmentCredential> CreateEnvironmentCredentialAsync(EnvironmentCredential cred);
+    Task<EnvironmentCredential> UpdateEnvironmentCredentialAsync(EnvironmentCredential cred);
+    Task<bool> DeleteEnvironmentCredentialAsync(int id);
+
+    Task<List<AutomationScript>> GetAutomationScriptsAsync(int companyId, int? moduleId, int? suiteId, string? testCaseId);
+    Task<AutomationScript?> GetAutomationScriptAsync(int id);
+    // Storage layer owns version assignment: looks up the current max Version for the same
+    // Company+Module+TestCase+FileName and saves the new row as max+1, so callers never have to
+    // compute/race on that themselves.
+    Task<AutomationScript> SaveAutomationScriptAsync(AutomationScript script);
+    Task<AutomationScript> UpdateAutomationScriptStatusAsync(int id, string status);
+
     // ---- Phase 8: multi-company, teams ----
     Task<Company> CreateCompanyAsync(Company company);
     Task<List<Company>> GetCompaniesAsync();

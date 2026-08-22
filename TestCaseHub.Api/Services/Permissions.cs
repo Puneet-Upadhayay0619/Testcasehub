@@ -69,6 +69,25 @@ public static class Permissions
     // Team<->Module assignment.
     public static bool CanManageTeams(this ClaimsPrincipal user) => user.IsAtLeast(Roles.Admin);
 
+    // --- Automation-generation architecture (agreed in planning) ---
+
+    // Linking a module to a GitHub/ADO repo exposes read access to proprietary source code --
+    // same Admin-and-above bar as configuring DB connection strings on an Environment Target.
+    public static bool CanManageRepoLinks(this ClaimsPrincipal user) => user.IsAtLeast(Roles.Admin);
+
+    // Setting/editing a named execution credential's password is Admin-and-above, same bar as
+    // the DB connection strings it lives next to on the same Environment Target.
+    public static bool CanConfigureAutomationCredentials(this ClaimsPrincipal user) => user.IsAtLeast(Roles.Admin);
+
+    // Explicitly agreed: Company Admin AND Team Lead can both trigger an automation run --
+    // Lead only ever picks a credential by Label, never sees the plaintext password.
+    public static bool CanTriggerTestRun(this ClaimsPrincipal user) => user.IsAtLeast(Roles.Lead);
+
+    // Saving/retrieving AI-generated automation scripts: same Contributor-and-above bar as
+    // editing test cases -- a QA contributor should be able to save a script they just had
+    // Claude generate for their own test case without needing a Lead/Admin to do it for them.
+    public static bool CanManageAutomationScripts(this ClaimsPrincipal user) => user.IsAtLeast(Roles.Contributor);
+
     // --- Company scope (Phase 8) ---
     // Every role except SuperAdmin carries exactly one CompanyId; SuperAdmin carries none
     // (represented as null) because they're not confined to one company at all.

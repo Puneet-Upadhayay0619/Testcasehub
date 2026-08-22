@@ -32,6 +32,9 @@ public class JsonFileDataStore : IDataStore
         public List<Notification> Notifications { get; set; } = new();
         public List<ApiKey> ApiKeys { get; set; } = new();
         public List<EnvironmentTarget> EnvironmentTargets { get; set; } = new();
+        public List<ModuleRepoLink> ModuleRepoLinks { get; set; } = new();
+        public List<EnvironmentCredential> EnvironmentCredentials { get; set; } = new();
+        public List<AutomationScript> AutomationScripts { get; set; } = new();
         public List<Company> Companies { get; set; } = new();
         public List<CompanyAdminInvite> CompanyAdminInvites { get; set; } = new();
         public List<Team> Teams { get; set; } = new();
@@ -50,6 +53,9 @@ public class JsonFileDataStore : IDataStore
         public int NextNotificationId { get; set; } = 1;
         public int NextApiKeyId { get; set; } = 1;
         public int NextEnvironmentTargetId { get; set; } = 1;
+        public int NextModuleRepoLinkId { get; set; } = 1;
+        public int NextEnvironmentCredentialId { get; set; } = 1;
+        public int NextAutomationScriptId { get; set; } = 1;
         public int NextCompanyId { get; set; } = 1;
         public int NextCompanyAdminInviteId { get; set; } = 1;
         public int NextTeamId { get; set; } = 1;
@@ -597,6 +603,106 @@ public class JsonFileDataStore : IDataStore
             if (idx >= 0) _data.EnvironmentTargets[idx] = env;
             await PersistAsync();
             return env;
+        });
+
+    public Task<List<ModuleRepoLink>> GetModuleRepoLinksAsync(int moduleId) =>
+        WithLockAsync(async () => _data.ModuleRepoLinks.Where(l => l.ModuleId == moduleId).OrderBy(l => l.Layer).ToList());
+
+    public Task<ModuleRepoLink?> GetModuleRepoLinkAsync(int id) =>
+        WithLockAsync(async () => _data.ModuleRepoLinks.FirstOrDefault(l => l.Id == id));
+
+    public Task<ModuleRepoLink> CreateModuleRepoLinkAsync(ModuleRepoLink link) =>
+        WithLockAsync(async () =>
+        {
+            link.Id = _data.NextModuleRepoLinkId++;
+            _data.ModuleRepoLinks.Add(link);
+            await PersistAsync();
+            return link;
+        });
+
+    public Task<ModuleRepoLink> UpdateModuleRepoLinkAsync(ModuleRepoLink link) =>
+        WithLockAsync(async () =>
+        {
+            var idx = _data.ModuleRepoLinks.FindIndex(l => l.Id == link.Id);
+            if (idx >= 0) _data.ModuleRepoLinks[idx] = link;
+            await PersistAsync();
+            return link;
+        });
+
+    public Task<bool> DeleteModuleRepoLinkAsync(int id) =>
+        WithLockAsync(async () =>
+        {
+            var removed = _data.ModuleRepoLinks.RemoveAll(l => l.Id == id) > 0;
+            if (removed) await PersistAsync();
+            return removed;
+        });
+
+    public Task<List<EnvironmentCredential>> GetEnvironmentCredentialsAsync(int environmentTargetId) =>
+        WithLockAsync(async () => _data.EnvironmentCredentials.Where(c => c.EnvironmentTargetId == environmentTargetId).OrderBy(c => c.Label).ToList());
+
+    public Task<EnvironmentCredential?> GetEnvironmentCredentialAsync(int id) =>
+        WithLockAsync(async () => _data.EnvironmentCredentials.FirstOrDefault(c => c.Id == id));
+
+    public Task<EnvironmentCredential> CreateEnvironmentCredentialAsync(EnvironmentCredential cred) =>
+        WithLockAsync(async () =>
+        {
+            cred.Id = _data.NextEnvironmentCredentialId++;
+            _data.EnvironmentCredentials.Add(cred);
+            await PersistAsync();
+            return cred;
+        });
+
+    public Task<EnvironmentCredential> UpdateEnvironmentCredentialAsync(EnvironmentCredential cred) =>
+        WithLockAsync(async () =>
+        {
+            var idx = _data.EnvironmentCredentials.FindIndex(c => c.Id == cred.Id);
+            if (idx >= 0) _data.EnvironmentCredentials[idx] = cred;
+            await PersistAsync();
+            return cred;
+        });
+
+    public Task<bool> DeleteEnvironmentCredentialAsync(int id) =>
+        WithLockAsync(async () =>
+        {
+            var removed = _data.EnvironmentCredentials.RemoveAll(c => c.Id == id) > 0;
+            if (removed) await PersistAsync();
+            return removed;
+        });
+
+    public Task<List<AutomationScript>> GetAutomationScriptsAsync(int companyId, int? moduleId, int? suiteId, string? testCaseId) =>
+        WithLockAsync(async () =>
+        {
+            IEnumerable<AutomationScript> q = _data.AutomationScripts.Where(s => s.CompanyId == companyId);
+            if (moduleId is not null) q = q.Where(s => s.ModuleId == moduleId);
+            if (suiteId is not null) q = q.Where(s => s.SuiteId == suiteId);
+            if (!string.IsNullOrWhiteSpace(testCaseId)) q = q.Where(s => s.TestCaseId == testCaseId);
+            return q.OrderByDescending(s => s.GeneratedAt).ToList();
+        });
+
+    public Task<AutomationScript?> GetAutomationScriptAsync(int id) =>
+        WithLockAsync(async () => _data.AutomationScripts.FirstOrDefault(s => s.Id == id));
+
+    public Task<AutomationScript> SaveAutomationScriptAsync(AutomationScript script) =>
+        WithLockAsync(async () =>
+        {
+            var currentMax = _data.AutomationScripts
+                .Where(s => s.CompanyId == script.CompanyId && s.ModuleId == script.ModuleId
+                    && s.TestCaseId == script.TestCaseId && s.FileName == script.FileName)
+                .Select(s => (int?)s.Version).DefaultIfEmpty(0).Max();
+            script.Version = (currentMax ?? 0) + 1;
+            script.Id = _data.NextAutomationScriptId++;
+            _data.AutomationScripts.Add(script);
+            await PersistAsync();
+            return script;
+        });
+
+    public Task<AutomationScript> UpdateAutomationScriptStatusAsync(int id, string status) =>
+        WithLockAsync(async () =>
+        {
+            var script = _data.AutomationScripts.First(s => s.Id == id);
+            script.Status = status;
+            await PersistAsync();
+            return script;
         });
 
     // ---- Phase 8: multi-company, teams ----

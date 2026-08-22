@@ -159,6 +159,62 @@ public class EfCoreDataStore : IDataStore
     public async Task<EnvironmentTarget> CreateEnvironmentTargetAsync(EnvironmentTarget env) { _db.EnvironmentTargets.Add(env); await _db.SaveChangesAsync(); return env; }
     public async Task<EnvironmentTarget> UpdateEnvironmentTargetAsync(EnvironmentTarget env) { await _db.SaveChangesAsync(); return env; }
 
+    public Task<List<ModuleRepoLink>> GetModuleRepoLinksAsync(int moduleId) =>
+        _db.ModuleRepoLinks.Where(l => l.ModuleId == moduleId).OrderBy(l => l.Layer).ToListAsync();
+    public Task<ModuleRepoLink?> GetModuleRepoLinkAsync(int id) => _db.ModuleRepoLinks.FirstOrDefaultAsync(l => l.Id == id);
+    public async Task<ModuleRepoLink> CreateModuleRepoLinkAsync(ModuleRepoLink link) { _db.ModuleRepoLinks.Add(link); await _db.SaveChangesAsync(); return link; }
+    public async Task<ModuleRepoLink> UpdateModuleRepoLinkAsync(ModuleRepoLink link) { await _db.SaveChangesAsync(); return link; }
+    public async Task<bool> DeleteModuleRepoLinkAsync(int id)
+    {
+        var link = await _db.ModuleRepoLinks.FindAsync(id);
+        if (link is null) return false;
+        _db.ModuleRepoLinks.Remove(link);
+        await _db.SaveChangesAsync();
+        return true;
+    }
+
+    public Task<List<EnvironmentCredential>> GetEnvironmentCredentialsAsync(int environmentTargetId) =>
+        _db.EnvironmentCredentials.Where(c => c.EnvironmentTargetId == environmentTargetId).OrderBy(c => c.Label).ToListAsync();
+    public Task<EnvironmentCredential?> GetEnvironmentCredentialAsync(int id) => _db.EnvironmentCredentials.FirstOrDefaultAsync(c => c.Id == id);
+    public async Task<EnvironmentCredential> CreateEnvironmentCredentialAsync(EnvironmentCredential cred) { _db.EnvironmentCredentials.Add(cred); await _db.SaveChangesAsync(); return cred; }
+    public async Task<EnvironmentCredential> UpdateEnvironmentCredentialAsync(EnvironmentCredential cred) { await _db.SaveChangesAsync(); return cred; }
+    public async Task<bool> DeleteEnvironmentCredentialAsync(int id)
+    {
+        var cred = await _db.EnvironmentCredentials.FindAsync(id);
+        if (cred is null) return false;
+        _db.EnvironmentCredentials.Remove(cred);
+        await _db.SaveChangesAsync();
+        return true;
+    }
+
+    public Task<List<AutomationScript>> GetAutomationScriptsAsync(int companyId, int? moduleId, int? suiteId, string? testCaseId)
+    {
+        var q = _db.AutomationScripts.Where(s => s.CompanyId == companyId);
+        if (moduleId is not null) q = q.Where(s => s.ModuleId == moduleId);
+        if (suiteId is not null) q = q.Where(s => s.SuiteId == suiteId);
+        if (!string.IsNullOrWhiteSpace(testCaseId)) q = q.Where(s => s.TestCaseId == testCaseId);
+        return q.OrderByDescending(s => s.GeneratedAt).ToListAsync();
+    }
+    public Task<AutomationScript?> GetAutomationScriptAsync(int id) => _db.AutomationScripts.FirstOrDefaultAsync(s => s.Id == id);
+    public async Task<AutomationScript> SaveAutomationScriptAsync(AutomationScript script)
+    {
+        var currentMax = await _db.AutomationScripts
+            .Where(s => s.CompanyId == script.CompanyId && s.ModuleId == script.ModuleId
+                && s.TestCaseId == script.TestCaseId && s.FileName == script.FileName)
+            .Select(s => (int?)s.Version).MaxAsync();
+        script.Version = (currentMax ?? 0) + 1;
+        _db.AutomationScripts.Add(script);
+        await _db.SaveChangesAsync();
+        return script;
+    }
+    public async Task<AutomationScript> UpdateAutomationScriptStatusAsync(int id, string status)
+    {
+        var script = await _db.AutomationScripts.FirstAsync(s => s.Id == id);
+        script.Status = status;
+        await _db.SaveChangesAsync();
+        return script;
+    }
+
     // ---- Phase 8: multi-company, teams ----
     public async Task<Company> CreateCompanyAsync(Company company) { _db.Companies.Add(company); await _db.SaveChangesAsync(); return company; }
     public Task<List<Company>> GetCompaniesAsync() => _db.Companies.OrderBy(c => c.Name).ToListAsync();
