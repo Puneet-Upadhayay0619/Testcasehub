@@ -87,12 +87,12 @@ public class AutomationGenerationService
     // warnings, same save -- this just loops instead of making the caller click 46 times. A
     // single item failing (bad test case id, repo fetch error, etc.) does not abort the rest of
     // the batch; its failure is reported back in that item's own result.
-    public async Task<List<BatchItemOutcome>> GenerateBatchAsync(int companyId, int moduleId, string? layer, List<string> testCaseIds, string? framework, string actorDisplayName)
+    public async Task<List<BatchItemOutcome>> GenerateBatchAsync(int companyId, int moduleId, string? layer, string? verificationType, List<string> testCaseIds, string? framework, string actorDisplayName)
     {
         var results = new List<BatchItemOutcome>();
         foreach (var testCaseId in testCaseIds)
         {
-            if (!string.IsNullOrWhiteSpace(layer))
+            if (!string.IsNullOrWhiteSpace(layer) || !string.IsNullOrWhiteSpace(verificationType))
             {
                 var tc = await _store.GetTestCaseAsync(testCaseId);
                 if (tc is null)
@@ -100,9 +100,14 @@ public class AutomationGenerationService
                     results.Add(new BatchItemOutcome(testCaseId, false, "Test case not found.", null, new List<string>()));
                     continue;
                 }
-                if (!string.Equals(tc.Layer, layer, StringComparison.OrdinalIgnoreCase))
+                if (!string.IsNullOrWhiteSpace(layer) && !string.Equals(tc.Layer, layer, StringComparison.OrdinalIgnoreCase))
                 {
-                    results.Add(new BatchItemOutcome(testCaseId, false, $"Test case's Layer is '{tc.Layer}', not '{layer}' -- skipped so it doesn't get grounded against the wrong repo link. Regroup it into its correct layer's batch.", null, new List<string>()));
+                    results.Add(new BatchItemOutcome(testCaseId, false, $"Test case's Layer is '{tc.Layer}', not '{layer}' -- skipped so it doesn't get grounded against the wrong repo link. Regroup it into its correct batch.", null, new List<string>()));
+                    continue;
+                }
+                if (!string.IsNullOrWhiteSpace(verificationType) && !string.Equals(tc.VerificationType, verificationType, StringComparison.OrdinalIgnoreCase))
+                {
+                    results.Add(new BatchItemOutcome(testCaseId, false, $"Test case's VerificationType is '{tc.VerificationType}', not '{verificationType}' -- skipped. Regroup it into its correct batch.", null, new List<string>()));
                     continue;
                 }
             }

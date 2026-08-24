@@ -140,7 +140,7 @@ public class AutomationScriptsController : ControllerBase
         if (req.TestCaseIds.Count > 5)
             return BadRequest($"Batch generation is capped at 5 test cases per call (got {req.TestCaseIds.Count}) -- split into smaller groups, e.g. by Layer, then 5 at a time within that Layer.");
 
-        var items = await _generation.GenerateBatchAsync(effective.Value, req.ModuleId, req.Layer, req.TestCaseIds, req.Framework, ActorDisplayName);
+        var items = await _generation.GenerateBatchAsync(effective.Value, req.ModuleId, req.Layer, req.VerificationType, req.TestCaseIds, req.Framework, ActorDisplayName);
         var response = new BatchGenerationResponse(
             items.Count, items.Count(i => i.Success), items.Count(i => !i.Success),
             items.Select(i => new BatchGenerationItemResult(i.TestCaseId, i.Success, i.Error, i.Script is null ? null : AutomationScriptResponse.From(i.Script), i.Warnings)).ToList()

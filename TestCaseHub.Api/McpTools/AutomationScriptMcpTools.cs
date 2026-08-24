@@ -138,7 +138,8 @@ public class AutomationScriptMcpTools
     public async Task<object> GenerateAutomationScriptsBatch(
         ClaimsPrincipal user,
         int moduleId,
-        [Description("Frontend, Backend, or Database -- when given, every testCaseId must have this exact Layer, otherwise that item is skipped with an explanatory error instead of being generated against the wrong repo link. Omit to skip the layer check.")] string? layer,
+        [Description("Product area (e.g. Dashboard, App-API, App -- check list_test_cases for this company's actual values) -- when given, every testCaseId must have this exact Layer, otherwise that item is skipped with an explanatory error. Omit to skip this check.")] string? layer,
+        [Description("Kind of test (e.g. UI, API-Contract, Database -- check list_test_cases for this company's actual values). This is usually the right filter for a single-Layer module where 'UI test cases' vs 'API test cases' vs 'DB test cases' is what the caller actually means by grouping. Omit to skip this check.")] string? verificationType,
         [Description("Up to 5 real Test Case Hub test case IDs to generate scripts for")] List<string> testCaseIds,
         [Description("e.g. Playwright-TypeScript (optional)")] string? framework = null,
         int? companyId = null)
@@ -154,7 +155,7 @@ public class AutomationScriptMcpTools
         if (testCaseIds.Count > 5)
             return new { error = $"Batch generation is capped at 5 test cases per call (got {testCaseIds.Count}) -- split into smaller groups, e.g. by Layer, then 5 at a time within that Layer." };
 
-        var items = await _generation.GenerateBatchAsync(effective.Value, moduleId, layer, testCaseIds, framework, DisplayNameOf(user));
+        var items = await _generation.GenerateBatchAsync(effective.Value, moduleId, layer, verificationType, testCaseIds, framework, DisplayNameOf(user));
         return new
         {
             requested = items.Count,

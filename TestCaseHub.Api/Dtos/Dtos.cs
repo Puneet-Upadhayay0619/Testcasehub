@@ -189,7 +189,11 @@ public record GenerateAutomationScriptRequest(int ModuleId, string TestCaseId, s
 // each item is still its own full Anthropic call under the hood (same reliability reasoning as
 // single-generate: bounded prompt size, one failure doesn't take down 40 others, cost stays
 // visible per batch) -- this just removes the need to click Generate 46 times by hand.
-public record GenerateAutomationScriptsBatchRequest(int ModuleId, string? Layer, List<string> TestCaseIds, string? Framework);
+// Layer = product area (Dashboard/App-API/App) -- useful for a module that spans multiple
+// areas. VerificationType = kind of test (UI/API-Contract/Database) -- this is what "UWMC ka
+// UI Layer / API Layer / Database Layer" actually maps to for a Dashboard-only module where
+// every test case has the same Layer. Both optional, both AND'ed when given.
+public record GenerateAutomationScriptsBatchRequest(int ModuleId, string? Layer, string? VerificationType, List<string> TestCaseIds, string? Framework);
 public record BatchGenerationItemResult(string TestCaseId, bool Success, string? Error, AutomationScriptResponse? Script, List<string> Warnings);
 public record BatchGenerationResponse(int Requested, int Succeeded, int Failed, List<BatchGenerationItemResult> Items);
 

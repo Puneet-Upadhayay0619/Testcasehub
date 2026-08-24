@@ -542,6 +542,7 @@ let state = {
   viewingScriptId: null,
   automationScriptGenerating: false,
   automationBatchLayer: '',
+  automationBatchVerificationType: '',
   automationBatchSelectedIds: [],
   automationBatchRunning: false,
   automationBatchResult: null,
@@ -2312,7 +2313,8 @@ function batchEligibleTestCases(){
   return (DATA.testCases||[]).filter(tc =>
     tc.moduleId === String(state.automationScriptsModuleId) &&
     tc.status !== 'Deprecated' &&
-    (!state.automationBatchLayer || tc.layer === state.automationBatchLayer)
+    (!state.automationBatchLayer || tc.layer === state.automationBatchLayer) &&
+    (!state.automationBatchVerificationType || tc.verificationType === state.automationBatchVerificationType)
   );
 }
 function toggleBatchSelection(testCaseId, checked){
@@ -2339,6 +2341,7 @@ async function generateAutomationScriptsBatch(){
     const res = await apiFetch('/api/automation-scripts/generate-batch', { method:'POST', body: JSON.stringify({
       moduleId: Number(state.automationScriptsModuleId),
       layer: state.automationBatchLayer || null,
+      verificationType: state.automationBatchVerificationType || null,
       testCaseIds: state.automationBatchSelectedIds.slice()
     }) });
     state.automationBatchResult = res;
@@ -2369,15 +2372,21 @@ function renderBatchGeneratePanel(){
   ` : '';
   return `
     <div class="panel" style="margin-top:10px;background:#fafbfc;">
-      <h4 style="margin:0 0 6px;">Generate for several test cases at once (by Layer, max ${BATCH_MAX} per batch)</h4>
-      <p class="sub" style="margin-top:-4px;">Grouping by Layer makes sure each test case is grounded against the matching repo link (UI test → Frontend link, API test → Backend link, DB test → Database link). If a module has many test cases, run this a few times — 5 at a time — per Layer.</p>
-      <div class="field" style="max-width:260px;"><label>Layer filter</label>
-        <select id="automationBatchLayerSelect">
-          <option value="" ${!state.automationBatchLayer?'selected':''}>All layers</option>
-          <option value="Frontend" ${state.automationBatchLayer==='Frontend'?'selected':''}>Frontend (UI)</option>
-          <option value="Backend" ${state.automationBatchLayer==='Backend'?'selected':''}>Backend (API)</option>
-          <option value="Database" ${state.automationBatchLayer==='Database'?'selected':''}>Database</option>
-        </select>
+      <h4 style="margin:0 0 6px;">Generate for several test cases at once (max ${BATCH_MAX} per batch)</h4>
+      <p class="sub" style="margin-top:-4px;">Two independent filters: <strong>Layer</strong> is the product area a test case targets (Dashboard / App-API / App) — useful for a module that spans more than one. <strong>Verification type</strong> is the kind of test (UI / API-Contract / Database) — for a single-Layer module like this one, this is usually the split you actually want ("UWMC ka UI Layer" = VerificationType=UI, etc). Combine both, or leave either on "All".</p>
+      <div class="grid2" style="max-width:520px;">
+        <div class="field"><label>Layer filter</label>
+          <select id="automationBatchLayerSelect">
+            <option value="" ${!state.automationBatchLayer?'selected':''}>All layers</option>
+            ${LAYERS.map(l => `<option value="${l.v}" ${state.automationBatchLayer===l.v?'selected':''}>${escapeHtml(l.label)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="field"><label>Verification type filter</label>
+          <select id="automationBatchVerificationTypeSelect">
+            <option value="" ${!state.automationBatchVerificationType?'selected':''}>All types</option>
+            ${VERIFICATION_TYPES.map(v => `<option value="${v.v}" ${state.automationBatchVerificationType===v.v?'selected':''}>${escapeHtml(v.label)}</option>`).join('')}
+          </select>
+        </div>
       </div>
       <div style="max-height:220px;overflow-y:auto;margin-top:8px;">
         ${eligible.length ? rows : '<p class="sub">No test cases match this module/layer.</p>'}
@@ -3853,6 +3862,13 @@ function wireEvents(){
   const automationBatchLayerSelect = document.getElementById('automationBatchLayerSelect');
   if(automationBatchLayerSelect) automationBatchLayerSelect.addEventListener('change', (e) => {
     state.automationBatchLayer = e.target.value;
+    state.automationBatchSelectedIds = [];
+    state.automationBatchResult = null;
+    render();
+  });
+  const automationBatchVerificationTypeSelect = document.getElementById('automationBatchVerificationTypeSelect');
+  if(automationBatchVerificationTypeSelect) automationBatchVerificationTypeSelect.addEventListener('change', (e) => {
+    state.automationBatchVerificationType = e.target.value;
     state.automationBatchSelectedIds = [];
     state.automationBatchResult = null;
     render();
