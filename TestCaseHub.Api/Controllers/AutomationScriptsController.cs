@@ -122,4 +122,29 @@ public class AutomationScriptsController : ControllerBase
         if (!outcome.Success) return BadRequest(new { error = outcome.Error, warnings = outcome.Warnings });
         return Ok(new { script = AutomationScriptResponse.From(outcome.Script!), warnings = outcome.Warnings });
     }
+
+    // Batch sibling of Generate, scoped to Module + Layer ("UWMC ka UI Layer" / "UWMC ka API
+    // Layer" / "UWMC ka Database Layer" -- exact framing the company asked for instead of one
+    // whole-module click). Capped at 5 test cases per call: each item is still a full Anthropic
+    // call under the hood, so this bounds cost/blast-radius per request the same way the single
+    // -generate path does, while removing the need to click Generate one test case at a time.
+    [HttpPost("generate-batch")]
+    public async Task<ActionResult<BatchGenerationResponse>> GenerateBatch(GenerateAutomationScriptsBatchRequest req, [FromQuery] int? companyId = null)
+    {
+        if (!User.CanGenerateAutomationScript()) return Forbid();
+        var effective = User.ResolveActingCompanyId(companyId);
+        if (effective is null) return User.IsSuperAdmin() ? BadRequest("SuperAdmin must specify ?companyId=.") : Forbid();
+
+        if (req.TestCaseIds is null || req.TestCaseIds.Count == 0)
+            return BadRequest("Select at least one test case.");
+        if (req.TestCaseIds.Count > 5)
+            return BadRequest($"Batch generation is capped at 5 test cases per call (got {req.TestCaseIds.Count}) -- split into smaller groups, e.g. by Layer, then 5 at a time within that Layer.");
+
+        var items = await _generation.GenerateBatchAsync(effective.Value, req.ModuleId, req.Layer, req.TestCaseIds, req.Framework, ActorDisplayName);
+        var response = new BatchGenerationResponse(
+            items.Count, items.Count(i => i.Success), items.Count(i => !i.Success),
+            items.Select(i => new BatchGenerationItemResult(i.TestCaseId, i.Success, i.Error, i.Script is null ? null : AutomationScriptResponse.From(i.Script), i.Warnings)).ToList()
+        );
+        return Ok(response);
+    }
 }

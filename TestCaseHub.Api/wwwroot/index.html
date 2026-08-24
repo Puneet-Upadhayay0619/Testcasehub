@@ -541,6 +541,10 @@ let state = {
   automationScriptsTestCaseId: '',
   viewingScriptId: null,
   automationScriptGenerating: false,
+  automationBatchLayer: '',
+  automationBatchSelectedIds: [],
+  automationBatchRunning: false,
+  automationBatchResult: null,
   showAiSettings: false,
   aiSettingsLoading: false,
   showDuplicates: false,
@@ -2299,6 +2303,93 @@ async function generateAutomationScript(){
   state.automationScriptGenerating = false; render();
 }
 
+// Batch generation scoped to Module + Layer: pick a Layer (so every selected test case is
+// grounded against the repo link for that same layer), select up to 5 test cases, generate in
+// one call. The 5-cap is enforced both here (checkbox disabling) and server-side.
+const BATCH_MAX = 5;
+function batchEligibleTestCases(){
+  if(!state.automationScriptsModuleId) return [];
+  return (DATA.testCases||[]).filter(tc =>
+    tc.moduleId === String(state.automationScriptsModuleId) &&
+    tc.status !== 'Deprecated' &&
+    (!state.automationBatchLayer || tc.layer === state.automationBatchLayer)
+  );
+}
+function toggleBatchSelection(testCaseId, checked){
+  const ids = state.automationBatchSelectedIds;
+  if(checked){
+    if(ids.length >= BATCH_MAX){
+      showToast('Max ' + BATCH_MAX + ' test cases per batch — deselect one first, or run this in another batch.', 'error');
+      render();
+      return;
+    }
+    if(!ids.includes(testCaseId)) ids.push(testCaseId);
+  } else {
+    state.automationBatchSelectedIds = ids.filter(id => id !== testCaseId);
+  }
+  render();
+}
+async function generateAutomationScriptsBatch(){
+  if(!state.automationScriptsModuleId || state.automationBatchSelectedIds.length === 0){
+    showToast('Pick a module and select at least one test case.', 'error');
+    return;
+  }
+  state.automationBatchRunning = true; state.automationBatchResult = null; render();
+  try{
+    const res = await apiFetch('/api/automation-scripts/generate-batch', { method:'POST', body: JSON.stringify({
+      moduleId: Number(state.automationScriptsModuleId),
+      layer: state.automationBatchLayer || null,
+      testCaseIds: state.automationBatchSelectedIds.slice()
+    }) });
+    state.automationBatchResult = res;
+    showToast(res.succeeded + '/' + res.requested + ' scripts generated (' + res.failed + ' failed) — see summary below.', res.failed ? 'error' : 'success');
+    state.automationBatchSelectedIds = [];
+    await loadAutomationScripts();
+  } catch(err){ showToast('Batch generation failed: ' + err.message, 'error'); }
+  state.automationBatchRunning = false; render();
+}
+
+function renderBatchGeneratePanel(){
+  const eligible = batchEligibleTestCases();
+  const selected = state.automationBatchSelectedIds;
+  const rows = eligible.map(tc => `
+    <label class="checkbox-row" style="display:flex;gap:8px;align-items:flex-start;padding:4px 0;">
+      <input type="checkbox" data-batch-tc="${escapeHtml(tc.id)}" ${selected.includes(tc.id)?'checked':''} ${(!selected.includes(tc.id) && selected.length>=BATCH_MAX)?'disabled':''}>
+      <span><strong>${escapeHtml(tc.id)}</strong> — ${escapeHtml(tc.title)} <small class="muted">(${escapeHtml(tc.layer||'')}${tc.automationReady?', already automation-ready':''})</small></span>
+    </label>
+  `).join('');
+  const result = state.automationBatchResult;
+  const resultHtml = result ? `
+    <div class="panel" style="margin-top:10px;background:#f6f8fa;">
+      <strong>${result.succeeded}/${result.requested} succeeded</strong>${result.failed ? ', ' + result.failed + ' failed' : ''}
+      <ul style="margin:6px 0 0 18px;padding:0;">
+        ${result.items.map(i => `<li>${escapeHtml(i.testCaseId)}: ${i.success ? 'OK — ' + escapeHtml(i.script?.fileName||'') : '<span style="color:#b00;">' + escapeHtml(i.error||'failed') + '</span>'}</li>`).join('')}
+      </ul>
+    </div>
+  ` : '';
+  return `
+    <div class="panel" style="margin-top:10px;background:#fafbfc;">
+      <h4 style="margin:0 0 6px;">Generate for several test cases at once (by Layer, max ${BATCH_MAX} per batch)</h4>
+      <p class="sub" style="margin-top:-4px;">Grouping by Layer makes sure each test case is grounded against the matching repo link (UI test → Frontend link, API test → Backend link, DB test → Database link). If a module has many test cases, run this a few times — 5 at a time — per Layer.</p>
+      <div class="field" style="max-width:260px;"><label>Layer filter</label>
+        <select id="automationBatchLayerSelect">
+          <option value="" ${!state.automationBatchLayer?'selected':''}>All layers</option>
+          <option value="Frontend" ${state.automationBatchLayer==='Frontend'?'selected':''}>Frontend (UI)</option>
+          <option value="Backend" ${state.automationBatchLayer==='Backend'?'selected':''}>Backend (API)</option>
+          <option value="Database" ${state.automationBatchLayer==='Database'?'selected':''}>Database</option>
+        </select>
+      </div>
+      <div style="max-height:220px;overflow-y:auto;margin-top:8px;">
+        ${eligible.length ? rows : '<p class="sub">No test cases match this module/layer.</p>'}
+      </div>
+      <div class="actions-row">
+        <button type="button" id="generateBatchBtn" ${(state.automationBatchRunning || selected.length===0)?'disabled':''}>${state.automationBatchRunning ? 'Generating…' : 'Generate selected (' + selected.length + '/' + BATCH_MAX + ')'}</button>
+      </div>
+      ${resultHtml}
+    </div>
+  `;
+}
+
 function renderAutomationScripts(){
   const rows = (DATA.automationScripts||[]).map(s => `
     <tr>
@@ -2337,6 +2428,7 @@ function renderAutomationScripts(){
           <button type="button" id="generateScriptBtn" ${state.automationScriptGenerating?'disabled':''}>${state.automationScriptGenerating ? 'Generating…' : 'Generate with Claude (uses company Anthropic key)'}</button>
         </div>
         <p class="sub" style="margin-top:-4px;">Requires Lead role or above, and an Anthropic key configured under AI Settings — otherwise use the MCP-based flow instead.</p>
+        ${state.automationScriptsModuleId ? renderBatchGeneratePanel() : ''}
       ` : ''}
       <table style="margin-top:14px;">
         <thead><tr><th>File</th><th>Framework</th><th>Version</th><th>Status</th><th>Generated by</th><th></th></tr></thead>
@@ -3758,6 +3850,18 @@ function wireEvents(){
   }));
   const generateScriptBtn = document.getElementById('generateScriptBtn');
   if(generateScriptBtn) generateScriptBtn.addEventListener('click', () => { generateAutomationScript(); });
+  const automationBatchLayerSelect = document.getElementById('automationBatchLayerSelect');
+  if(automationBatchLayerSelect) automationBatchLayerSelect.addEventListener('change', (e) => {
+    state.automationBatchLayer = e.target.value;
+    state.automationBatchSelectedIds = [];
+    state.automationBatchResult = null;
+    render();
+  });
+  document.querySelectorAll('[data-batch-tc]').forEach(el => el.addEventListener('change', (e) => {
+    toggleBatchSelection(el.dataset.batchTc, e.target.checked);
+  }));
+  const generateBatchBtn = document.getElementById('generateBatchBtn');
+  if(generateBatchBtn) generateBatchBtn.addEventListener('click', () => { generateAutomationScriptsBatch(); });
 
   // ---------------- AI Settings ----------------
   const menuAiSettings = document.getElementById('menuAiSettings');

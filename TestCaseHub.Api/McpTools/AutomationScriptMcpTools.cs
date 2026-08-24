@@ -132,4 +132,35 @@ public class AutomationScriptMcpTools
         if (!outcome.Success) return new { error = outcome.Error, warnings = outcome.Warnings };
         return new { script = AutomationScriptResponse.From(outcome.Script!), warnings = outcome.Warnings };
     }
+
+    [McpServerTool(Name = "generate_automation_scripts_batch"),
+     Description("Batch sibling of generate_automation_script, scoped to Module + Layer (e.g. a module's UI Layer, API Layer, or Database Layer test cases) so each item is grounded against the repo link for the layer it actually belongs to. Capped at 5 testCaseIds per call -- each is still a full Anthropic call under the hood, so this bounds cost and blast-radius the same way single-generate does; split larger groups into multiple calls of 5. Requires Lead role or above. A single item failing does not abort the rest of the batch.")]
+    public async Task<object> GenerateAutomationScriptsBatch(
+        ClaimsPrincipal user,
+        int moduleId,
+        [Description("Frontend, Backend, or Database -- when given, every testCaseId must have this exact Layer, otherwise that item is skipped with an explanatory error instead of being generated against the wrong repo link. Omit to skip the layer check.")] string? layer,
+        [Description("Up to 5 real Test Case Hub test case IDs to generate scripts for")] List<string> testCaseIds,
+        [Description("e.g. Playwright-TypeScript (optional)")] string? framework = null,
+        int? companyId = null)
+    {
+        if (!user.CanGenerateAutomationScript())
+            return new { error = "You do not have permission to generate automation scripts (Lead role or above required -- this uses the company's own paid Anthropic API key)." };
+
+        var effective = user.ResolveActingCompanyId(companyId);
+        if (effective is null) return new { error = "SuperAdmin has no single company -- pass companyId explicitly." };
+
+        if (testCaseIds is null || testCaseIds.Count == 0)
+            return new { error = "Provide at least one testCaseId." };
+        if (testCaseIds.Count > 5)
+            return new { error = $"Batch generation is capped at 5 test cases per call (got {testCaseIds.Count}) -- split into smaller groups, e.g. by Layer, then 5 at a time within that Layer." };
+
+        var items = await _generation.GenerateBatchAsync(effective.Value, moduleId, layer, testCaseIds, framework, DisplayNameOf(user));
+        return new
+        {
+            requested = items.Count,
+            succeeded = items.Count(i => i.Success),
+            failed = items.Count(i => !i.Success),
+            items = items.Select(i => new { testCaseId = i.TestCaseId, success = i.Success, error = i.Error, script = i.Script is null ? null : AutomationScriptResponse.From(i.Script), warnings = i.Warnings })
+        };
+    }
 }

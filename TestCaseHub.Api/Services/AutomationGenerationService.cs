@@ -6,6 +6,7 @@ using TestCaseHub.Api.Storage;
 namespace TestCaseHub.Api.Services;
 
 public record GenerationOutcome(bool Success, string? Error, AutomationScript? Script, List<string> Warnings);
+public record BatchItemOutcome(string TestCaseId, bool Success, string? Error, AutomationScript? Script, List<string> Warnings);
 
 // Ties together CompanyAiSettings (the company's own Anthropic key), ModuleRepoLink +
 // RepoContentService (real source code), and AnthropicClient into the "direct API" generation
@@ -79,6 +80,37 @@ public class AutomationGenerationService
         };
         script = await _store.SaveAutomationScriptAsync(script);
         return new GenerationOutcome(true, null, script, warnings);
+    }
+
+    // Module+Layer scoped batch: caller (controller/MCP) has already capped TestCaseIds at 5.
+    // Each item still gets its own full GenerateAsync call -- same per-item validation, same
+    // warnings, same save -- this just loops instead of making the caller click 46 times. A
+    // single item failing (bad test case id, repo fetch error, etc.) does not abort the rest of
+    // the batch; its failure is reported back in that item's own result.
+    public async Task<List<BatchItemOutcome>> GenerateBatchAsync(int companyId, int moduleId, string? layer, List<string> testCaseIds, string? framework, string actorDisplayName)
+    {
+        var results = new List<BatchItemOutcome>();
+        foreach (var testCaseId in testCaseIds)
+        {
+            if (!string.IsNullOrWhiteSpace(layer))
+            {
+                var tc = await _store.GetTestCaseAsync(testCaseId);
+                if (tc is null)
+                {
+                    results.Add(new BatchItemOutcome(testCaseId, false, "Test case not found.", null, new List<string>()));
+                    continue;
+                }
+                if (!string.Equals(tc.Layer, layer, StringComparison.OrdinalIgnoreCase))
+                {
+                    results.Add(new BatchItemOutcome(testCaseId, false, $"Test case's Layer is '{tc.Layer}', not '{layer}' -- skipped so it doesn't get grounded against the wrong repo link. Regroup it into its correct layer's batch.", null, new List<string>()));
+                    continue;
+                }
+            }
+
+            var outcome = await GenerateAsync(companyId, moduleId, testCaseId, framework, actorDisplayName);
+            results.Add(new BatchItemOutcome(testCaseId, outcome.Success, outcome.Error, outcome.Script, outcome.Warnings));
+        }
+        return results;
     }
 
     private static string BuildPrompt(TestCase tc, List<RepoFile> files, string? framework)

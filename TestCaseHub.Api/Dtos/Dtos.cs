@@ -183,6 +183,16 @@ public record CompanyAiSettingsResponse(int CompanyId, string Provider, string M
 }
 public record GenerateAutomationScriptRequest(int ModuleId, string TestCaseId, string? Framework);
 
+// Batch generation, scoped to Module + Layer so each test case is grounded against the repo
+// link for the layer it actually belongs to (UI test -> Frontend link, API test -> Backend
+// link, DB test -> Database link) -- capped at 5 test cases per call. The cap exists because
+// each item is still its own full Anthropic call under the hood (same reliability reasoning as
+// single-generate: bounded prompt size, one failure doesn't take down 40 others, cost stays
+// visible per batch) -- this just removes the need to click Generate 46 times by hand.
+public record GenerateAutomationScriptsBatchRequest(int ModuleId, string? Layer, List<string> TestCaseIds, string? Framework);
+public record BatchGenerationItemResult(string TestCaseId, bool Success, string? Error, AutomationScriptResponse? Script, List<string> Warnings);
+public record BatchGenerationResponse(int Requested, int Succeeded, int Failed, List<BatchGenerationItemResult> Items);
+
 public record SaveAutomationScriptRequest(int ModuleId, string? TestCaseId, int? SuiteId, string FileName, string? Framework, string Content, string? GeneratedBy, string? SourceRepoRefs);
 public record UpdateAutomationScriptStatusRequest(string Status);
 public record AutomationScriptResponse(int Id, int CompanyId, int ModuleId, string? TestCaseId, int? SuiteId, string FileName, string Framework, string Content, string Status, string GeneratedBy, DateTime GeneratedAt, int Version, string SourceRepoRefs)
