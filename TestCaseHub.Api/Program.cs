@@ -76,7 +76,18 @@ builder.Services.AddScoped<TestCaseHub.Api.Services.ApiKeyService>();
 builder.Services.AddHttpClient<TestCaseHub.Api.Services.AdoService>();
 builder.Services.AddHttpClient<TestCaseHub.Api.Services.RepoContentService>();
 builder.Services.AddHttpClient<TestCaseHub.Api.Services.AnthropicClient>();
-builder.Services.AddHttpClient<TestCaseHub.Api.Services.ScriptExecutionService>();
+builder.Services.AddHttpClient<TestCaseHub.Api.Services.ScriptExecutionService>()
+    // Bug fix (found via live test on TC-UWMC-DSH-046): FieldAssist's dashboard responses are
+    // gzip/br-compressed. Without AutomaticDecompression, HttpClient hands back the raw
+    // compressed bytes; ReadAsStringAsync() then decodes them as UTF8 text (garbage), JSON
+    // parsing throws, and the response body silently becomes null -- even though the HTTP
+    // status was a perfectly good 200. Explicitly decompressing fixes that.
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+    {
+        AutomaticDecompression = System.Net.DecompressionMethods.GZip
+            | System.Net.DecompressionMethods.Deflate
+            | System.Net.DecompressionMethods.Brotli
+    });
 builder.Services.AddSingleton<IEmailSender, LoggingEmailSender>();
 builder.Services.AddDataProtection();
 builder.Services.AddSingleton<SecretProtector>();
