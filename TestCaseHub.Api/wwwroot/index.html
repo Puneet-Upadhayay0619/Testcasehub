@@ -2113,6 +2113,26 @@ async function createEnvironment(payload){
     showToast('Environment "' + created.name + '" created.', 'success');
   } catch(err){ showToast('Could not create environment: ' + err.message, 'error'); }
 }
+async function updateEnvironment(id, payload){
+  try{
+    const updated = await apiFetch('/api/environments/' + id, { method:'PUT', body: JSON.stringify(payload) });
+    DATA.environments = (DATA.environments||[]).map(e => e.id === id ? updated : e);
+    state.editingEnvId = null;
+    render();
+    showToast('Environment "' + updated.name + '" updated.', 'success');
+  } catch(err){ showToast('Could not update environment: ' + err.message, 'error'); }
+}
+async function deleteEnvironment(id, name){
+  if(!confirm('Delete environment "' + name + '"? This also deletes its saved execution credentials. This cannot be undone.')) return;
+  try{
+    await apiFetch('/api/environments/' + id, { method:'DELETE' });
+    DATA.environments = (DATA.environments||[]).filter(e => e.id !== id);
+    if(state.expandedEnvId === id) state.expandedEnvId = null;
+    if(state.editingEnvId === id) state.editingEnvId = null;
+    render();
+    showToast('Environment "' + name + '" deleted.', 'success');
+  } catch(err){ showToast('Could not delete environment: ' + err.message, 'error'); }
+}
 // ---------------- Environment execution credentials (named logins per environment) ----------------
 async function loadEnvironmentCredentials(envId){
   state.envCredentialsLoading = true; render();
@@ -2186,14 +2206,41 @@ function renderEnvironments(){
         ` : ''}
       </td></tr>
     `;
+    const isEditing = state.editingEnvId === e.id;
+    const editBlock = !isEditing ? '' : `
+      <tr><td colspan="5" style="background:var(--bg-soft);padding:12px;">
+        <strong style="font-size:13px;">Edit environment</strong>
+        <div class="grid2" style="margin-top:8px;">
+          <div class="field"><label>Name</label><input type="text" id="editEnvName_${e.id}" value="${escapeHtml(e.name)}"></div>
+          <div class="field"><label>Tenant</label><input type="text" id="editEnvTenant_${e.id}" value="${escapeHtml(e.tenant||'')}"></div>
+          <div class="field"><label>Type</label><select id="editEnvType_${e.id}"><option ${e.environmentType==='Staging'?'selected':''}>Staging</option><option ${e.environmentType==='Production'?'selected':''}>Production</option></select></div>
+          <div class="field"><label>App URL</label><input type="text" id="editEnvAppUrl_${e.id}" value="${escapeHtml(e.appBaseUrl||'')}"></div>
+          <div class="field"><label>Dashboard URL</label><input type="text" id="editEnvDashUrl_${e.id}" value="${escapeHtml(e.dashboardBaseUrl||'')}"> <small class="muted">Must be the BACKEND API host (e.g. fa-dashboard-apis[-beta].fieldassist.io), NOT the frontend app host (dashboard[-beta].fieldassist.io).</small></div>
+          <div class="field"><label>App API URL</label><input type="text" id="editEnvApiUrl_${e.id}" value="${escapeHtml(e.appApiBaseUrl||'')}"></div>
+          <div class="field"><label>Master DB connection string</label><input type="text" id="editEnvMasterDb_${e.id}" placeholder="${e.hasMasterDbConnection ? 'Set -- leave blank to keep' : 'Not set'}"></div>
+          <div class="field"><label>Transaction DB connection string</label><input type="text" id="editEnvTxnDb_${e.id}" placeholder="${e.hasTransactionDbConnection ? 'Set -- leave blank to keep' : 'Not set'}"></div>
+          <div class="field"><label>Report DB connection string</label><input type="text" id="editEnvReportDb_${e.id}" placeholder="${e.hasReportDbConnection ? 'Set -- leave blank to keep' : 'Not set'}"></div>
+        </div>
+        <div class="field"><label><input type="checkbox" id="editEnvRequiresCleanup_${e.id}" ${e.requiresTestDataCleanup ? 'checked' : ''}> Requires test-data cleanup after runs</label></div>
+        <div class="actions-row">
+          <button type="button" data-save-env-edit="${e.id}">Save changes</button>
+          <button type="button" class="ghost small" data-cancel-env-edit="${e.id}">Cancel</button>
+        </div>
+      </td></tr>
+    `;
     return `
     <tr>
       <td>${escapeHtml(e.name)}<br><small class="muted">${escapeHtml(e.tenant||'')}</small></td>
       <td><span class="${e.environmentType==='Production'?'badge b-p1':'badge b-active'}">${escapeHtml(e.environmentType)}</span></td>
       <td>${escapeHtml(e.appBaseUrl||'')}</td>
       <td>${e.hasMasterDbConnection?'Master ✓ ':''}${e.hasTransactionDbConnection?'Txn ✓ ':''}${e.hasReportDbConnection?'Report ✓':''}</td>
-      <td><button type="button" class="small ghost" data-toggle-env-credentials="${e.id}">${expanded ? 'Hide credentials ▾' : 'Credentials ▸'}</button></td>
+      <td>
+        <button type="button" class="small ghost" data-toggle-env-credentials="${e.id}">${expanded ? 'Hide credentials ▾' : 'Credentials ▸'}</button>
+        ${canEditContent() ? `<button type="button" class="small ghost" data-toggle-env-edit="${e.id}">${isEditing ? 'Cancel edit' : 'Edit'}</button>` : ''}
+        ${canEditContent() ? `<button type="button" class="small danger" data-delete-env="${e.id}" data-env-name="${escapeHtml(e.name)}">Delete</button>` : ''}
+      </td>
     </tr>
+    ${editBlock}
     ${credsBlock}
     `;
   }).join('');
@@ -2208,7 +2255,7 @@ function renderEnvironments(){
           <div class="field"><label>Tenant</label><input type="text" id="envTenant" placeholder="e.g. mars"></div>
           <div class="field"><label>Type</label><select id="envType"><option>Staging</option><option>Production</option></select></div>
           <div class="field"><label>App URL</label><input type="text" id="envAppUrl" placeholder="https://..."></div>
-          <div class="field"><label>Dashboard URL</label><input type="text" id="envDashUrl" placeholder="https://..."></div>
+          <div class="field"><label>Dashboard URL</label><input type="text" id="envDashUrl" placeholder="https://..."> <small class="muted">Must be the BACKEND API host (native execution's HTTP steps hit this directly, no browser) -- e.g. fa-dashboard-apis[-beta].fieldassist.io, NOT the frontend app host you see in your browser address bar (dashboard[-beta].fieldassist.io). Pointing this at the frontend host silently returns the SPA's index.html (200 OK) for every /api/... call instead of real JSON. Find the right host via browser devtools Network tab while using the real Dashboard.</small></div>
           <div class="field"><label>App API URL</label><input type="text" id="envApiUrl" placeholder="https://..."></div>
           <div class="field"><label>Master DB connection string (optional)</label><input type="text" id="envMasterDb"></div>
           <div class="field"><label>Transaction DB connection string (optional)</label><input type="text" id="envTxnDb"></div>
@@ -3856,6 +3903,36 @@ function wireEvents(){
       requiresTestDataCleanup: document.getElementById('envRequiresCleanup').checked
     });
   });
+
+  document.querySelectorAll('[data-toggle-env-edit]').forEach(el => el.addEventListener('click', () => {
+    const envId = Number(el.dataset.toggleEnvEdit);
+    state.editingEnvId = state.editingEnvId === envId ? null : envId;
+    render();
+  }));
+  document.querySelectorAll('[data-cancel-env-edit]').forEach(el => el.addEventListener('click', () => {
+    state.editingEnvId = null;
+    render();
+  }));
+  document.querySelectorAll('[data-save-env-edit]').forEach(el => el.addEventListener('click', () => {
+    const envId = Number(el.dataset.saveEnvEdit);
+    const name = document.getElementById('editEnvName_' + envId).value.trim();
+    if(!name){ showToast('Environment name is required.', 'error'); return; }
+    updateEnvironment(envId, {
+      name,
+      tenant: document.getElementById('editEnvTenant_' + envId).value.trim(),
+      environmentType: document.getElementById('editEnvType_' + envId).value,
+      appBaseUrl: document.getElementById('editEnvAppUrl_' + envId).value.trim(),
+      dashboardBaseUrl: document.getElementById('editEnvDashUrl_' + envId).value.trim(),
+      appApiBaseUrl: document.getElementById('editEnvApiUrl_' + envId).value.trim(),
+      masterDbConnectionString: document.getElementById('editEnvMasterDb_' + envId).value.trim() || null,
+      transactionDbConnectionString: document.getElementById('editEnvTxnDb_' + envId).value.trim() || null,
+      reportDbConnectionString: document.getElementById('editEnvReportDb_' + envId).value.trim() || null,
+      requiresTestDataCleanup: document.getElementById('editEnvRequiresCleanup_' + envId).checked
+    });
+  }));
+  document.querySelectorAll('[data-delete-env]').forEach(el => el.addEventListener('click', () => {
+    deleteEnvironment(Number(el.dataset.deleteEnv), el.dataset.envName);
+  }));
 
   // ---------------- Environment execution credentials ----------------
   document.querySelectorAll('[data-toggle-env-credentials]').forEach(el => el.addEventListener('click', () => {

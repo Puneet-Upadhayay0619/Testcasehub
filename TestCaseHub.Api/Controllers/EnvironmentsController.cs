@@ -56,6 +56,47 @@ public class EnvironmentsController : ControllerBase
         return EnvironmentTargetResponse.From(env);
     }
 
+    // Full edit -- Name/Tenant/Type/URLs/cleanup-flag always overwritten; DB connection strings
+    // only rotated if a non-blank value was actually supplied (same "blank = leave unchanged"
+    // convention as UpdateCredential below), since GET responses never return the plaintext to
+    // pre-fill an edit form with in the first place.
+    [HttpPut("{id:int}")]
+    public async Task<ActionResult<EnvironmentTargetResponse>> Update(int id, CreateEnvironmentTargetRequest req)
+    {
+        if (!User.CanManageUsers()) return Forbid(); // Admin-only, same bar as Create/Delete.
+        var env = await _store.GetEnvironmentTargetAsync(id);
+        if (env is null) return NotFound("Environment target not found.");
+        if (!User.HasCompanyAccess(env.CompanyId)) return Forbid();
+        if (string.IsNullOrWhiteSpace(req.Name)) return BadRequest("Name is required.");
+        if (!Models.EnvironmentType.All.Contains(req.EnvironmentType)) return BadRequest("EnvironmentType must be Staging or Production.");
+
+        env.Name = req.Name.Trim(); env.Tenant = req.Tenant ?? ""; env.EnvironmentType = req.EnvironmentType;
+        env.DashboardBaseUrl = req.DashboardBaseUrl ?? ""; env.AppApiBaseUrl = req.AppApiBaseUrl ?? ""; env.AppBaseUrl = req.AppBaseUrl ?? "";
+        env.RequiresTestDataCleanup = req.RequiresTestDataCleanup;
+        if (!string.IsNullOrWhiteSpace(req.MasterDbConnectionString)) env.MasterDbConnectionStringEncrypted = _protector.Protect(req.MasterDbConnectionString);
+        if (!string.IsNullOrWhiteSpace(req.TransactionDbConnectionString)) env.TransactionDbConnectionStringEncrypted = _protector.Protect(req.TransactionDbConnectionString);
+        if (!string.IsNullOrWhiteSpace(req.ReportDbConnectionString)) env.ReportDbConnectionStringEncrypted = _protector.Protect(req.ReportDbConnectionString);
+
+        env = await _store.UpdateEnvironmentTargetAsync(env);
+        return EnvironmentTargetResponse.From(env);
+    }
+
+    // Cascades to this environment's named execution credentials (same "delete the children
+    // first" convention as DeleteModuleAsync elsewhere in this codebase) -- a dangling
+    // EnvironmentCredential pointing at a deleted EnvironmentTargetId would be unreachable
+    // through the UI anyway, so removing it outright is simpler than orphaning it.
+    [HttpDelete("{id:int}")]
+    public async Task<ActionResult> Delete(int id)
+    {
+        if (!User.CanManageUsers()) return Forbid(); // Admin-only, same bar as Create/Update.
+        var env = await _store.GetEnvironmentTargetAsync(id);
+        if (env is null) return NotFound("Environment target not found.");
+        if (!User.HasCompanyAccess(env.CompanyId)) return Forbid();
+
+        await _store.DeleteEnvironmentTargetAsync(id);
+        return NoContent();
+    }
+
     // Separate small endpoint rather than folding into a general Update (none exists yet for
     // EnvironmentTarget) -- this is the one field native execution actually needs post-creation,
     // and keeping it narrow avoids having to design a full PUT contract for every other field

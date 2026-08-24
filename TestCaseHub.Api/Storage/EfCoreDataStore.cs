@@ -159,6 +159,16 @@ public class EfCoreDataStore : IDataStore
     public async Task<EnvironmentTarget> CreateEnvironmentTargetAsync(EnvironmentTarget env) { _db.EnvironmentTargets.Add(env); await _db.SaveChangesAsync(); return env; }
     public async Task<EnvironmentTarget> UpdateEnvironmentTargetAsync(EnvironmentTarget env) { await _db.SaveChangesAsync(); return env; }
 
+    public async Task<bool> DeleteEnvironmentTargetAsync(int id)
+    {
+        var env = await _db.EnvironmentTargets.FindAsync(id);
+        if (env is null) return false;
+        _db.EnvironmentCredentials.RemoveRange(_db.EnvironmentCredentials.Where(c => c.EnvironmentTargetId == id));
+        _db.EnvironmentTargets.Remove(env);
+        await _db.SaveChangesAsync();
+        return true;
+    }
+
     public Task<List<ModuleRepoLink>> GetModuleRepoLinksAsync(int moduleId) =>
         _db.ModuleRepoLinks.Where(l => l.ModuleId == moduleId).OrderBy(l => l.Layer).ToListAsync();
     public Task<ModuleRepoLink?> GetModuleRepoLinkAsync(int id) => _db.ModuleRepoLinks.FirstOrDefaultAsync(l => l.Id == id);

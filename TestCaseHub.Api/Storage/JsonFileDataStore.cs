@@ -607,6 +607,16 @@ public class JsonFileDataStore : IDataStore
             return env;
         });
 
+    public Task<bool> DeleteEnvironmentTargetAsync(int id) =>
+        WithLockAsync(async () =>
+        {
+            if (!_data.EnvironmentTargets.Any(e => e.Id == id)) return false;
+            _data.EnvironmentCredentials.RemoveAll(c => c.EnvironmentTargetId == id);
+            _data.EnvironmentTargets.RemoveAll(e => e.Id == id);
+            await PersistAsync();
+            return true;
+        });
+
     public Task<List<ModuleRepoLink>> GetModuleRepoLinksAsync(int moduleId) =>
         WithLockAsync(async () => _data.ModuleRepoLinks.Where(l => l.ModuleId == moduleId).OrderBy(l => l.Layer).ToList());
 

@@ -115,6 +115,7 @@ public interface IDataStore
     Task<EnvironmentTarget?> GetEnvironmentTargetAsync(int id);
     Task<EnvironmentTarget> CreateEnvironmentTargetAsync(EnvironmentTarget env);
     Task<EnvironmentTarget> UpdateEnvironmentTargetAsync(EnvironmentTarget env);
+    Task<bool> DeleteEnvironmentTargetAsync(int id);
 
     // ---- Automation-generation architecture: repo links, per-environment credentials,
     // generated scripts (agreed in planning; see Models/ModuleRepoLink.cs, Models/
