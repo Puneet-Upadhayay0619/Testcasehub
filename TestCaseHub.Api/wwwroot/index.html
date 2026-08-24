@@ -3841,8 +3841,13 @@ function wireEvents(){
   const automationScriptsModuleSelect = document.getElementById('automationScriptsModuleSelect');
   if(automationScriptsModuleSelect) automationScriptsModuleSelect.addEventListener('change', (e) => {
     state.automationScriptsModuleId = e.target.value;
+    state.automationBatchSelectedIds = [];
+    state.automationBatchResult = null;
     render();
     loadAutomationScripts();
+    // The batch panel below needs DATA.testCases for this module -- normally only populated by
+    // browsing the main Test Cases screen, which the user may not have done in this session.
+    if(e.target.value) loadModuleData(Number(e.target.value)).then(render);
   });
   const automationScriptsTestCaseId = document.getElementById('automationScriptsTestCaseId');
   if(automationScriptsTestCaseId) automationScriptsTestCaseId.addEventListener('change', (e) => {
