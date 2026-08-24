@@ -168,7 +168,18 @@ public class ScriptExecutionService
         if (!string.IsNullOrWhiteSpace(text))
         {
             try { bodyElement = JsonDocument.Parse(text).RootElement.Clone(); }
-            catch { bodyElement = JsonDocument.Parse("null").RootElement.Clone(); }
+            catch (Exception parseEx)
+            {
+                // Don't silently swallow this -- a 200 with a body that isn't valid JSON usually
+                // means the request never reached the real API controller at all (an auth
+                // redirect to an HTML login/SPA shell, a proxy/CDN error page, wrong base URL,
+                // etc). Surfacing the raw text here is often the single most useful diagnostic
+                // in the whole run, since "test case hub se hi complete testing" means this log
+                // IS the only debugging tool available -- there's no browser devtools to fall
+                // back on.
+                log.Add($"  WARNING: response body is not valid JSON ({parseEx.Message}). Raw (truncated): {Truncate(text)}");
+                bodyElement = JsonDocument.Parse("null").RootElement.Clone();
+            }
         }
         else bodyElement = JsonDocument.Parse("null").RootElement.Clone();
 
