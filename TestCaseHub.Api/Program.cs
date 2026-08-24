@@ -1,4 +1,5 @@
 using System.Text;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
@@ -89,7 +90,21 @@ builder.Services.AddHttpClient<TestCaseHub.Api.Services.ScriptExecutionService>(
             | System.Net.DecompressionMethods.Brotli
     });
 builder.Services.AddSingleton<IEmailSender, LoggingEmailSender>();
-builder.Services.AddDataProtection();
+// Real production bug found via live testing (see PostgresXmlRepository.cs for full story):
+// the default Data Protection key ring lives on the container's ephemeral filesystem, so every
+// Render redeploy loses it and permanently breaks every previously-Protect()-ed secret. When
+// running against Postgres, persist the key ring there instead so it survives redeploys.
+if (storageMode == "SqlServer" && dbProvider == "Postgres")
+{
+    var pgConnForKeys = builder.Configuration.GetConnectionString("Postgres")!;
+    builder.Services.AddDataProtection()
+        .SetApplicationName("TestCaseHub")
+        .AddKeyManagementOptions(o => o.XmlRepository = new TestCaseHub.Api.Services.PostgresXmlRepository(pgConnForKeys));
+}
+else
+{
+    builder.Services.AddDataProtection().SetApplicationName("TestCaseHub");
+}
 builder.Services.AddSingleton<SecretProtector>();
 builder.Services.AddScoped<TestCaseHub.Api.Services.AutomationGenerationService>();
 
@@ -397,6 +412,14 @@ if (storageMode == "SqlServer")
             @"ALTER TABLE ""EnvironmentTargets"" ADD COLUMN IF NOT EXISTS ""TestCompanyId"" integer NULL;",
             @"ALTER TABLE ""EnvironmentTargets"" ADD COLUMN IF NOT EXISTS ""TestCompanyBId"" integer NULL;",
             @"ALTER TABLE ""EnvironmentTargets"" ADD COLUMN IF NOT EXISTS ""TestReservedModuleEnum"" integer NULL;",
+
+            // Data Protection key ring storage (see PostgresXmlRepository.cs) -- must exist
+            // before AddDataProtection() tries to read/write keys through it.
+            @"CREATE TABLE IF NOT EXISTS ""DataProtectionKeys"" (
+                ""Id"" serial PRIMARY KEY,
+                ""FriendlyName"" text NULL,
+                ""Xml"" text NOT NULL
+            );",
         };
         foreach (var stmt in deltaSql)
             await db.Database.ExecuteSqlRawAsync(stmt);
