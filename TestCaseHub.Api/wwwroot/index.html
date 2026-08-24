@@ -541,6 +541,12 @@ let state = {
   automationScriptsTestCaseId: '',
   viewingScriptId: null,
   automationScriptGenerating: false,
+  runningScriptId: null,
+  runScriptEnvId: '',
+  runScriptCredId: '',
+  runScriptTestRunId: '',
+  runScriptBusy: false,
+  runScriptResult: null,
   automationBatchLayer: '',
   automationBatchVerificationType: '',
   automationBatchSelectedIds: [],
@@ -2084,6 +2090,20 @@ async function loadEnvironments(){
   try{ DATA.environments = await apiFetch('/api/environments'); } catch(err){ showToast('Could not load environments: ' + err.message, 'error'); }
   state.environmentsLoading = false; render();
 }
+async function saveTestCompanyConfig(envId){
+  const v = (id) => { const el = document.getElementById(id); const n = el && el.value.trim() !== '' ? Number(el.value) : null; return n; };
+  const body = {
+    testCompanyId: v('envTestCompanyId_' + envId),
+    testCompanyBId: v('envTestCompanyBId_' + envId),
+    testReservedModuleEnum: v('envTestReservedModule_' + envId)
+  };
+  try{
+    const updated = await apiFetch('/api/environments/' + envId + '/test-company-id', { method:'PATCH', body: JSON.stringify(body) });
+    DATA.environments = DATA.environments.map(e => e.id === envId ? updated : e);
+    render();
+    showToast('Test data config saved.', 'success');
+  } catch(err){ showToast('Could not save: ' + err.message, 'error'); }
+}
 async function createEnvironment(payload){
   try{
     const created = await apiFetch('/api/environments', { method:'POST', body: JSON.stringify(payload) });
@@ -2136,7 +2156,7 @@ function renderEnvironments(){
     const credsBlock = !expanded ? '' : `
       <tr><td colspan="5" style="background:var(--bg-soft);padding:12px;">
         <strong style="font-size:13px;">Named execution credentials</strong>
-        <p class="sub" style="margin:2px 0 8px;">Agreed in planning: a Lead triggering a run picks one of these by Label -- the password is encrypted at rest and never shown again after saving.</p>
+        <p class="sub" style="margin:2px 0 8px;">Agreed in planning: a Lead triggering a run picks one of these by Label -- the password is encrypted at rest and never shown again after saving. <strong>For native script execution (the "Run" button on Automation Scripts): paste a Bearer token here, NOT your account's login password</strong> -- log into the Dashboard once, copy the token from browser devtools (Application/Storage tab, or the Authorization header on any XHR), and paste that. Test Case Hub sends it as-is in every request's Authorization header.</p>
         ${state.envCredentialsLoading ? '<p class="sub">Loading…</p>' : `
           <table style="margin-bottom:8px;">
             <thead><tr><th>Label</th><th>Email</th><th>Tag</th><th>Password set</th><th></th></tr></thead>
@@ -2148,10 +2168,21 @@ function renderEnvironments(){
           <div class="grid2">
             <div class="field"><label>Label</label><input type="text" id="credLabel_${e.id}" placeholder="e.g. Primary Admin"></div>
             <div class="field"><label>Email (optional)</label><input type="text" id="credEmail_${e.id}"></div>
-            <div class="field"><label>Password</label><input type="password" id="credPassword_${e.id}"></div>
+            <div class="field"><label>Password / Bearer token</label><input type="password" id="credPassword_${e.id}" placeholder="Paste a Bearer token for native Run, or a real password for manual reference"></div>
             <div class="field"><label>Tag (optional)</label><input type="text" id="credTag_${e.id}" placeholder="e.g. modern-trade-enabled"></div>
           </div>
           <div class="actions-row"><button type="button" data-save-credential="${e.id}">Save credential</button></div>
+        ` : ''}
+        ${canEditContent() ? `
+          <hr style="margin:12px 0;border:none;border-top:1px solid var(--border,#ddd);">
+          <strong style="font-size:13px;">Native execution test data (Admin)</strong>
+          <p class="sub" style="margin:2px 0 8px;">Needed only by scripts whose steps reference {{TestCompanyId}} / {{TestCompanyBId}} / {{TestReservedModuleEnum}} -- the REAL tenant CompanyId(s) inside the target app's own database, NOT this Test Case Hub's CompanyId (a totally different numbering space).</p>
+          <div class="grid2">
+            <div class="field"><label>Test Company Id</label><input type="number" id="envTestCompanyId_${e.id}" value="${e.testCompanyId ?? ''}"></div>
+            <div class="field"><label>Test Company B Id (cross-company checks)</label><input type="number" id="envTestCompanyBId_${e.id}" value="${e.testCompanyBId ?? ''}"></div>
+            <div class="field"><label>Reserved test Module Enum</label><input type="number" id="envTestReservedModule_${e.id}" value="${e.testReservedModuleEnum ?? ''}"></div>
+          </div>
+          <div class="actions-row"><button type="button" class="small" data-save-test-company="${e.id}">Save test data config</button></div>
         ` : ''}
       </td></tr>
     `;
@@ -2287,6 +2318,21 @@ async function updateAutomationScriptStatus(id, status){
     showToast('Script status set to ' + status + '.', 'success');
   } catch(err){ showToast('Could not update status: ' + err.message, 'error'); }
 }
+async function executeAutomationScript(scriptId){
+  if(!state.runScriptEnvId){ showToast('Pick an Environment Target first.', 'error'); return; }
+  state.runScriptBusy = true; state.runScriptResult = null; render();
+  try{
+    const body = {
+      environmentTargetId: Number(state.runScriptEnvId),
+      environmentCredentialId: state.runScriptCredId ? Number(state.runScriptCredId) : null,
+      testRunId: state.runScriptTestRunId ? Number(state.runScriptTestRunId) : null
+    };
+    const result = await apiFetch('/api/automation-scripts/' + scriptId + '/execute', { method:'POST', body: JSON.stringify(body) });
+    state.runScriptResult = Object.assign({ scriptId }, result);
+    showToast('Run finished: ' + result.status + '.', result.passed ? 'success' : 'error');
+  } catch(err){ showToast('Could not run script: ' + err.message, 'error'); }
+  state.runScriptBusy = false; render();
+}
 async function generateAutomationScript(){
   if(!state.automationScriptsModuleId || !state.automationScriptsTestCaseId.trim()){
     showToast('Pick a module and enter a test case ID to generate for.', 'error');
@@ -2399,6 +2445,52 @@ function renderBatchGeneratePanel(){
   `;
 }
 
+function renderRunScriptPanel(s){
+  const envId = state.runScriptEnvId;
+  const creds = envId ? (DATA.environmentCredentials[envId]||[]) : [];
+  const result = state.runScriptResult && state.runScriptResult.scriptId === s.id ? state.runScriptResult : null;
+  return `
+    <tr><td colspan="6">
+      <div style="border:1px solid var(--border,#ddd);border-radius:6px;padding:10px;">
+        <p class="sub" style="margin-top:0;">Runs natively inside Test Case Hub -- no external Playwright/Node process, nothing to download. Picks up the environment's Master DB connection and, if selected, a named credential's stored token for Authorization.</p>
+        <div class="grid2">
+          <div class="field"><label>Environment Target</label>
+            <select id="runScriptEnv_${s.id}">
+              <option value="">Select…</option>
+              ${(DATA.environments||[]).map(e=>`<option value="${e.id}" ${String(e.id)===String(envId)?'selected':''}>${escapeHtml(e.name)} (${escapeHtml(e.environmentType)})</option>`).join('')}
+            </select>
+          </div>
+          <div class="field"><label>Run as credential (optional)</label>
+            <select id="runScriptCred_${s.id}" ${!envId?'disabled':''}>
+              <option value="">None</option>
+              ${creds.map(c=>`<option value="${c.id}" ${String(c.id)===String(state.runScriptCredId)?'selected':''}>${escapeHtml(c.label)}${c.tag?' — '+escapeHtml(c.tag):''}</option>`).join('')}
+            </select>
+          </div>
+          <div class="field"><label>Record into Test Run (optional)</label>
+            <select id="runScriptTestRun_${s.id}">
+              <option value="">Don't record -- just show result here</option>
+              ${(DATA.testRuns||[]).map(r=>`<option value="${r.id}" ${String(r.id)===String(state.runScriptTestRunId)?'selected':''}>${escapeHtml(r.name)}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+        <div class="actions-row">
+          <button type="button" data-execute-script="${s.id}" ${(state.runScriptBusy || !envId)?'disabled':''}>${state.runScriptBusy ? 'Running…' : 'Run now'}</button>
+        </div>
+        ${result ? `
+          <div style="margin-top:8px;">
+            <span class="${badgeClass('s', result.status)}">${escapeHtml(result.status)}</span>
+            ${result.testRunResultId ? `<span class="sub"> — recorded in Test Run (result #${result.testRunResultId})</span>` : ''}
+            ${result.error ? `<p style="color:#b00;margin:6px 0;">${escapeHtml(result.error)}</p>` : ''}
+            <details style="margin-top:6px;"><summary class="sub">Step log</summary>
+              <pre style="white-space:pre-wrap;font-size:12px;background:#f7f7f7;padding:8px;border-radius:4px;">${escapeHtml((result.log||[]).join('\n'))}</pre>
+            </details>
+          </div>
+        ` : ''}
+      </div>
+    </td></tr>
+  `;
+}
+
 function renderAutomationScripts(){
   const rows = (DATA.automationScripts||[]).map(s => `
     <tr>
@@ -2415,9 +2507,15 @@ function renderAutomationScripts(){
         ` : `<span class="badge b-active">${escapeHtml(s.status)}</span>`}
       </td>
       <td>${escapeHtml(s.generatedBy||'')}</td>
-      <td><button type="button" class="small ghost" data-view-script="${s.id}">${state.viewingScriptId===s.id?'Hide':'View'}</button></td>
+      <td>
+        <button type="button" class="small ghost" data-view-script="${s.id}">${state.viewingScriptId===s.id?'Hide':'View'}</button>
+        ${canSeeAutomationMenu() ? (s.hasExecutionDefinition
+          ? `<button type="button" class="small ghost" data-toggle-run-script="${s.id}">${state.runningScriptId===s.id?'Hide':'Run'}</button>`
+          : `<span class="sub" title="No native execution definition set for this script yet">Run n/a</span>`) : ''}
+      </td>
     </tr>
     ${state.viewingScriptId===s.id ? `<tr><td colspan="6"><textarea readonly style="width:100%;min-height:220px;font-family:monospace;font-size:12px;">${escapeHtml(s.content)}</textarea></td></tr>` : ''}
+    ${state.runningScriptId===s.id ? renderRunScriptPanel(s) : ''}
   `).join('');
   return `
     <div class="panel">
@@ -3788,6 +3886,9 @@ function wireEvents(){
   document.querySelectorAll('[data-delete-credential]').forEach(el => el.addEventListener('click', () => {
     deleteEnvironmentCredential(Number(el.dataset.credEnv), Number(el.dataset.deleteCredential));
   }));
+  document.querySelectorAll('[data-save-test-company]').forEach(el => el.addEventListener('click', () => {
+    saveTestCompanyConfig(Number(el.dataset.saveTestCompany));
+  }));
 
   // ---------------- Module repo links ----------------
   const menuRepoLinks = document.getElementById('menuRepoLinks');
@@ -3835,6 +3936,10 @@ function wireEvents(){
     closeAllPanels();
     state.showAutomationScripts = next;
     render();
+    if(next){
+      if(!(DATA.environments||[]).length) loadEnvironments().then(render);
+      if(!(DATA.testRuns||[]).length) loadTestRuns().then(render);
+    }
   });
   const closeAutomationScripts = document.getElementById('closeAutomationScripts');
   if(closeAutomationScripts) closeAutomationScripts.addEventListener('click', () => { state.showAutomationScripts = false; render(); });
@@ -3861,6 +3966,27 @@ function wireEvents(){
   }));
   document.querySelectorAll('[data-script-status]').forEach(el => el.addEventListener('change', (e) => {
     updateAutomationScriptStatus(Number(el.dataset.scriptStatus), e.target.value);
+  }));
+  document.querySelectorAll('[data-toggle-run-script]').forEach(el => el.addEventListener('click', () => {
+    const id = Number(el.dataset.toggleRunScript);
+    state.runningScriptId = state.runningScriptId === id ? null : id;
+    state.runScriptResult = null;
+    render();
+  }));
+  document.querySelectorAll('[id^="runScriptEnv_"]').forEach(el => el.addEventListener('change', (e) => {
+    state.runScriptEnvId = e.target.value;
+    state.runScriptCredId = '';
+    render();
+    if(state.runScriptEnvId) loadEnvironmentCredentials(state.runScriptEnvId).then(render);
+  }));
+  document.querySelectorAll('[id^="runScriptCred_"]').forEach(el => el.addEventListener('change', (e) => {
+    state.runScriptCredId = e.target.value;
+  }));
+  document.querySelectorAll('[id^="runScriptTestRun_"]').forEach(el => el.addEventListener('change', (e) => {
+    state.runScriptTestRunId = e.target.value;
+  }));
+  document.querySelectorAll('[data-execute-script]').forEach(el => el.addEventListener('click', () => {
+    executeAutomationScript(Number(el.dataset.executeScript));
   }));
   const generateScriptBtn = document.getElementById('generateScriptBtn');
   if(generateScriptBtn) generateScriptBtn.addEventListener('click', () => { generateAutomationScript(); });

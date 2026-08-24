@@ -138,6 +138,7 @@ public interface IDataStore
     // compute/race on that themselves.
     Task<AutomationScript> SaveAutomationScriptAsync(AutomationScript script);
     Task<AutomationScript> UpdateAutomationScriptStatusAsync(int id, string status);
+    Task<AutomationScript> SetExecutionDefinitionAsync(int id, string executionDefinitionJson);
 
     Task<CompanyAiSettings?> GetCompanyAiSettingsAsync(int companyId);
     Task<CompanyAiSettings> UpsertCompanyAiSettingsAsync(CompanyAiSettings settings);

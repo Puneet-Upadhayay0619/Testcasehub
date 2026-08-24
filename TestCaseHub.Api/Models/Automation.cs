@@ -61,6 +61,20 @@ public class EnvironmentTarget
     // target app) — surfaced so it's visible which environments need a teardown step.
     public bool RequiresTestDataCleanup { get; set; } = true;
 
+    // The real FieldAssist tenant CompanyId (in FieldAssist's OWN database, NOT this Test Case
+    // Hub's CompanyId) that native execution's SQL assertions should filter by. Added because
+    // Test Case Hub's own CompanyId (e.g. 3 for Flick2know) has nothing to do with the numeric
+    // CompanyId inside FieldAssist's MTModuleConfigurations table -- ScriptExecutionService
+    // substitutes the "{{TestCompanyId}}" template token in a step's sql Params (or http Body)
+    // with this value at run time, so step definitions stay portable across environments.
+    public int? TestCompanyId { get; set; }
+    // Second tenant CompanyId, needed only by cross-company isolation checks (e.g. DSH-037:
+    // "saving Company A's config must never touch Company B's rows").
+    public int? TestCompanyBId { get; set; }
+    // A ModuleEnum value safe to toggle MTModules.IsActive on/off for a test (e.g. DSH-043)
+    // without touching one of the 14 live-seeded production modules.
+    public int? TestReservedModuleEnum { get; set; }
+
     [MaxLength(256)]
     public string CreatedBy { get; set; } = "";
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;

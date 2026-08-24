@@ -20,7 +20,10 @@ public class AutomationScriptMcpTools
 {
     private readonly IDataStore _store;
     private readonly AutomationGenerationService _generation;
-    public AutomationScriptMcpTools(IDataStore store, AutomationGenerationService generation) { _store = store; _generation = generation; }
+    private readonly ScriptExecutionService _execSvc;
+    private readonly NotificationService _notify;
+    public AutomationScriptMcpTools(IDataStore store, AutomationGenerationService generation, ScriptExecutionService execSvc, NotificationService notify)
+    { _store = store; _generation = generation; _execSvc = execSvc; _notify = notify; }
 
     private static string DisplayNameOf(ClaimsPrincipal user) =>
         user.FindFirstValue("displayName") ?? user.FindFirstValue(ClaimsIdentity.DefaultNameClaimType) ?? user.FindFirstValue(ClaimTypes.Email) ?? "Unknown";
@@ -163,5 +166,81 @@ public class AutomationScriptMcpTools
             failed = items.Count(i => !i.Success),
             items = items.Select(i => new { testCaseId = i.TestCaseId, success = i.Success, error = i.Error, script = i.Script is null ? null : AutomationScriptResponse.From(i.Script), warnings = i.Warnings })
         };
+    }
+
+
+    [McpServerTool(Name = "set_automation_script_execution_definition"),
+     Description("Sets/replaces the native execution definition for a saved automation script -- a small JSON array of steps (type: http/sql/assert) that Test Case Hub's own backend interprets directly, with NO Node.js/Playwright subprocess and nothing to download or run externally ('test case hub se hi complete testing', per explicit instruction). This is a hand-authored translation of what the script's real Content (Playwright/TypeScript) does -- the human-readable Content is untouched. Step shape: http {method,path,body?,expectStatus?,authRequired?,saveAs?}; sql {database:'Master'|'Transaction'|'Report',query,params?,saveAs}; assert {source,arrayField?,find?,field?,op:'equals'|'notEquals'|'isTrue'|'isFalse'|'notNull'|'isNull'|'greaterThan'|'greaterOrEqual'|'lessThan'|'arrayLengthEquals'|'allMatch'|'stringEmpty',expected?,label?}. Requires Contributor role or above, same bar as saving the script itself.")]
+    public async Task<object> SetAutomationScriptExecutionDefinition(ClaimsPrincipal user, int scriptId, [Description("JSON array of steps -- see tool description for the step DSL shape")] string executionDefinitionJson)
+    {
+        if (!user.CanManageAutomationScripts())
+            return new { error = "You do not have permission to update automation scripts (Contributor role or above required)." };
+        var existing = await _store.GetAutomationScriptAsync(scriptId);
+        if (existing is null) return new { error = "Automation script not found." };
+        if (!user.HasCompanyAccess(existing.CompanyId)) return new { error = "You do not have access to this script's company." };
+
+        try
+        {
+            var parsed = System.Text.Json.JsonSerializer.Deserialize<List<TestCaseHub.Api.Services.ExecStep>>(executionDefinitionJson, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+            if (parsed is null || parsed.Count == 0) return new { error = "executionDefinitionJson must be a non-empty JSON array of steps." };
+        }
+        catch (Exception ex)
+        {
+            return new { error = $"executionDefinitionJson is not valid: {ex.Message}" };
+        }
+
+        var script = await _store.SetExecutionDefinitionAsync(scriptId, executionDefinitionJson);
+        return AutomationScriptResponse.From(script);
+    }
+
+    [McpServerTool(Name = "execute_automation_script"),
+     Description("Runs a saved automation script NATIVELY, in-process on Test Case Hub's own backend, against a configured EnvironmentTarget (and optionally a named EnvironmentCredential for auth) -- no external Playwright/Node process, nothing for the user to download or run themselves. Requires the script to already have an execution definition set (see set_automation_script_execution_definition) -- otherwise this returns a 'Blocked' status explaining that. Requires Lead role or above (same bar as triggering any Test Run). If testRunId is given, the Pass/Fail/Blocked outcome is also recorded as a TestRunResult against that run, exactly like a CI's automated result post -- including the same Production-environment safety block.")]
+    public async Task<object> ExecuteAutomationScript(ClaimsPrincipal user, int scriptId, int environmentTargetId, int? environmentCredentialId = null, int? testRunId = null)
+    {
+        if (!user.CanTriggerTestRun())
+            return new { error = "You do not have permission to trigger automation runs (Lead role or above required)." };
+
+        var script = await _store.GetAutomationScriptAsync(scriptId);
+        if (script is null) return new { error = "Automation script not found." };
+        if (!user.HasCompanyAccess(script.CompanyId)) return new { error = "You do not have access to this script's company." };
+
+        var env = await _store.GetEnvironmentTargetAsync(environmentTargetId);
+        if (env is null || env.CompanyId != script.CompanyId) return new { error = "environmentTargetId not found for this company." };
+
+        EnvironmentCredential? cred = null;
+        if (environmentCredentialId is not null)
+        {
+            cred = await _store.GetEnvironmentCredentialAsync(environmentCredentialId.Value);
+            if (cred is null || cred.EnvironmentTargetId != env.Id) return new { error = "environmentCredentialId must belong to the selected environmentTargetId." };
+        }
+
+        TestRun? run = null;
+        if (testRunId is not null)
+        {
+            run = await _store.GetTestRunAsync(testRunId.Value);
+            if (run is null || run.CompanyId != script.CompanyId) return new { error = "testRunId not found for this company." };
+            if (env.EnvironmentType == EnvironmentType.Production)
+                return new { error = $"'{env.Name}' is a Production environment -- automated execution results cannot be recorded against Production." };
+        }
+
+        var outcome = await _execSvc.ExecuteAsync(script, env, cred);
+
+        int? resultId = null;
+        if (run is not null && !string.IsNullOrEmpty(script.TestCaseId))
+        {
+            var result = new TestRunResult
+            {
+                TestRunId = run.Id, TestCaseId = script.TestCaseId, Platform = null,
+                Status = outcome.Status, IsAutomated = true, ExecutedBy = "Automated (Test Case Hub native runner)",
+                Notes = outcome.Error ?? string.Join(" | ", outcome.Log.TakeLast(3)),
+                RunAttemptKey = $"native:{script.Id}:v{script.Version}:{Guid.NewGuid():N}"
+            };
+            result = await _store.AddTestRunResultAsync(result);
+            resultId = result.Id;
+            if (outcome.Status == "Fail")
+                await _notify.NotifyAdminsAndLeadsAsync("AutomationFailed", $"Native run failed for {script.TestCaseId} in run '{run.Name}'.");
+        }
+
+        return new { passed = outcome.Passed, status = outcome.Status, log = outcome.Log, error = outcome.Error, testRunResultId = resultId };
     }
 }

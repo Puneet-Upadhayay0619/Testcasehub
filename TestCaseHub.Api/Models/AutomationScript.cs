@@ -56,4 +56,14 @@ public class AutomationScript
     // to something readable even if a link is later deleted.
     [MaxLength(128)]
     public string SourceRepoRefs { get; set; } = "";
+
+    // Native execution definition (agreed: "test case hub se hi complete testing" -- no
+    // Node/Playwright subprocess, no downloading a zip and running it externally). This is a
+    // small JSON array of steps (http / sql / assert) that ScriptExecutionService interprets
+    // directly in-process against an EnvironmentTarget + EnvironmentCredential. It is a
+    // best-effort, hand-authored TRANSLATION of what Content (the real Playwright/TS script)
+    // does -- kept separate from Content so the human-readable script (and its FLAG comments
+    // documenting real-vs-spec gaps) is never lost or auto-generated away. Null/empty means
+    // "not yet wired for native execution" -- Run stays disabled in the UI for that script.
+    public string? ExecutionDefinitionJson { get; set; }
 }

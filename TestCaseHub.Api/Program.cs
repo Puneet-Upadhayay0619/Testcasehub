@@ -76,6 +76,7 @@ builder.Services.AddScoped<TestCaseHub.Api.Services.ApiKeyService>();
 builder.Services.AddHttpClient<TestCaseHub.Api.Services.AdoService>();
 builder.Services.AddHttpClient<TestCaseHub.Api.Services.RepoContentService>();
 builder.Services.AddHttpClient<TestCaseHub.Api.Services.AnthropicClient>();
+builder.Services.AddHttpClient<TestCaseHub.Api.Services.ScriptExecutionService>();
 builder.Services.AddSingleton<IEmailSender, LoggingEmailSender>();
 builder.Services.AddDataProtection();
 builder.Services.AddSingleton<SecretProtector>();
@@ -377,6 +378,14 @@ if (storageMode == "SqlServer")
                 ""Version"" integer NOT NULL DEFAULT 1,
                 ""SourceRepoRefs"" varchar(128) NOT NULL DEFAULT ''
             );",
+
+            // Native execution DSL (Phase 10 -- "test case hub se hi complete testing", no
+            // Node/Playwright subprocess). Nullable text; empty/null = not wired for native run.
+            @"ALTER TABLE ""AutomationScripts"" ADD COLUMN IF NOT EXISTS ""ExecutionDefinitionJson"" text NULL;",
+
+            @"ALTER TABLE ""EnvironmentTargets"" ADD COLUMN IF NOT EXISTS ""TestCompanyId"" integer NULL;",
+            @"ALTER TABLE ""EnvironmentTargets"" ADD COLUMN IF NOT EXISTS ""TestCompanyBId"" integer NULL;",
+            @"ALTER TABLE ""EnvironmentTargets"" ADD COLUMN IF NOT EXISTS ""TestReservedModuleEnum"" integer NULL;",
         };
         foreach (var stmt in deltaSql)
             await db.Database.ExecuteSqlRawAsync(stmt);
@@ -448,6 +457,18 @@ using (var seedScope = app.Services.CreateScope())
     foreach (var m in (await seedStore.GetModulesAsync()).Where(m => m.CompanyId == defaultCompany.Id))
         await seedStore.AddTeamModuleAsync(defaultTeam.Id, m.Id);
 
+    // Native execution definitions for the 19 Approved UWMC scripts (see
+    // Data/UwmcExecutionDefinitions.cs) -- idempotent: only fills in scripts that don't already
+    // have one, so a manually-edited definition is never overwritten by a redeploy. Scoped to
+    // module id 8 (UWMC) wherever it lives; safe no-op if that module/company doesn't exist yet
+    // (e.g. a brand-new deployment with no UWMC data at all).
+    foreach (var company in await seedStore.GetCompaniesAsync())
+    {
+        var uwmcScripts = (await seedStore.GetAutomationScriptsAsync(company.Id, moduleId: null, suiteId: null, testCaseId: null))
+            .Where(s => TestCaseHub.Api.Data.UwmcExecutionDefinitions.ByTestCaseId.ContainsKey(s.TestCaseId ?? "") && string.IsNullOrWhiteSpace(s.ExecutionDefinitionJson));
+        foreach (var script in uwmcScripts)
+            await seedStore.SetExecutionDefinitionAsync(script.Id, TestCaseHub.Api.Data.UwmcExecutionDefinitions.ByTestCaseId[script.TestCaseId!]);
+    }
 }
 
 if (app.Environment.IsDevelopment())

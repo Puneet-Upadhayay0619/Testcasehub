@@ -56,6 +56,24 @@ public class EnvironmentsController : ControllerBase
         return EnvironmentTargetResponse.From(env);
     }
 
+    // Separate small endpoint rather than folding into a general Update (none exists yet for
+    // EnvironmentTarget) -- this is the one field native execution actually needs post-creation,
+    // and keeping it narrow avoids having to design a full PUT contract for every other field
+    // (base URLs, DB connection strings) that isn't needed for this feature.
+    [HttpPatch("{id:int}/test-company-id")]
+    public async Task<ActionResult<EnvironmentTargetResponse>> SetTestCompanyId(int id, SetTestCompanyIdRequest req)
+    {
+        if (!User.CanManageUsers()) return Forbid(); // Admin-only, same bar as everything else on this entity
+        var env = await _store.GetEnvironmentTargetAsync(id);
+        if (env is null) return NotFound("Environment target not found.");
+        if (!User.HasCompanyAccess(env.CompanyId)) return Forbid();
+        if (req.TestCompanyId is not null) env.TestCompanyId = req.TestCompanyId;
+        if (req.TestCompanyBId is not null) env.TestCompanyBId = req.TestCompanyBId;
+        if (req.TestReservedModuleEnum is not null) env.TestReservedModuleEnum = req.TestReservedModuleEnum;
+        env = await _store.UpdateEnvironmentTargetAsync(env);
+        return EnvironmentTargetResponse.From(env);
+    }
+
     // --- Named execution credentials (agreed in planning): an environment often needs several
     // distinct logins (a plain admin, a non-Modern-Trade company's admin, a second company for
     // isolation checks) -- exactly what the UWMC automation project itself needed. Configuring

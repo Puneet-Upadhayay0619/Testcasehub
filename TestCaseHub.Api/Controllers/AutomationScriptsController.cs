@@ -20,7 +20,10 @@ public class AutomationScriptsController : ControllerBase
 {
     private readonly IDataStore _store;
     private readonly AutomationGenerationService _generation;
-    public AutomationScriptsController(IDataStore store, AutomationGenerationService generation) { _store = store; _generation = generation; }
+    private readonly ScriptExecutionService _execSvc;
+    private readonly NotificationService _notify;
+    public AutomationScriptsController(IDataStore store, AutomationGenerationService generation, ScriptExecutionService execSvc, NotificationService notify)
+    { _store = store; _generation = generation; _execSvc = execSvc; _notify = notify; }
 
     private string ActorDisplayName => User.FindFirstValue("displayName") ?? "Unknown";
 
@@ -146,5 +149,87 @@ public class AutomationScriptsController : ControllerBase
             items.Select(i => new BatchGenerationItemResult(i.TestCaseId, i.Success, i.Error, i.Script is null ? null : AutomationScriptResponse.From(i.Script), i.Warnings)).ToList()
         );
         return Ok(response);
+    }
+
+
+    // Sets/replaces the native execution DSL for a script (see ScriptExecutionService) -- same
+    // Contributor+ bar as saving/editing the script itself. Validated by attempting a parse
+    // before it's stored, so a broken definition never silently sits there until someone hits
+    // Run and gets a confusing error.
+    [HttpPost("{id:int}/execution-definition")]
+    public async Task<ActionResult<AutomationScriptResponse>> SetExecutionDefinition(int id, SetExecutionDefinitionRequest req)
+    {
+        if (!User.CanManageAutomationScripts()) return Forbid();
+        var script = await _store.GetAutomationScriptAsync(id);
+        if (script is null) return NotFound("Automation script not found.");
+        if (!User.HasCompanyAccess(script.CompanyId)) return Forbid();
+
+        try
+        {
+            var parsed = System.Text.Json.JsonSerializer.Deserialize<List<ExecStep>>(req.ExecutionDefinitionJson, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+            if (parsed is null || parsed.Count == 0) return BadRequest("ExecutionDefinitionJson must be a non-empty JSON array of steps.");
+        }
+        catch (Exception ex)
+        {
+            return BadRequest($"ExecutionDefinitionJson is not valid: {ex.Message}");
+        }
+
+        script = await _store.SetExecutionDefinitionAsync(id, req.ExecutionDefinitionJson);
+        return Ok(AutomationScriptResponse.From(script));
+    }
+
+    // Runs a script NATIVELY, in-process, against a configured EnvironmentTarget -- the whole
+    // point being "test case hub se hi complete testing", no external Playwright/Node process
+    // and nothing the user has to download and run themselves. Same CanTriggerTestRun bar
+    // (Lead+) as attaching a credential to a Test Run -- this is exactly that action, just
+    // executed by the interpreter instead of a human/CI.
+    [HttpPost("{id:int}/execute")]
+    public async Task<ActionResult<ExecuteAutomationScriptResponse>> Execute(int id, ExecuteAutomationScriptRequest req)
+    {
+        if (!User.CanTriggerTestRun()) return Forbid();
+        var script = await _store.GetAutomationScriptAsync(id);
+        if (script is null) return NotFound("Automation script not found.");
+        if (!User.HasCompanyAccess(script.CompanyId)) return Forbid();
+
+        var env = await _store.GetEnvironmentTargetAsync(req.EnvironmentTargetId);
+        if (env is null || env.CompanyId != script.CompanyId) return BadRequest("EnvironmentTargetId not found for this company.");
+
+        EnvironmentCredential? cred = null;
+        if (req.EnvironmentCredentialId is not null)
+        {
+            cred = await _store.GetEnvironmentCredentialAsync(req.EnvironmentCredentialId.Value);
+            if (cred is null || cred.EnvironmentTargetId != env.Id) return BadRequest("EnvironmentCredentialId must belong to the selected EnvironmentTargetId.");
+        }
+
+        TestRun? run = null;
+        if (req.TestRunId is not null)
+        {
+            run = await _store.GetTestRunAsync(req.TestRunId.Value);
+            if (run is null || run.CompanyId != script.CompanyId) return BadRequest("TestRunId not found for this company.");
+            // Same Production safety block as the CI-facing results/automated endpoint --
+            // Test Case Hub's own native runner is held to the exact same rule.
+            if (env.EnvironmentType == Models.EnvironmentType.Production)
+                return BadRequest(new { error = $"'{env.Name}' is a Production environment -- automated execution results cannot be recorded against Production." });
+        }
+
+        var outcome = await _execSvc.ExecuteAsync(script, env, cred);
+
+        int? resultId = null;
+        if (run is not null && !string.IsNullOrEmpty(script.TestCaseId))
+        {
+            var result = new TestRunResult
+            {
+                TestRunId = run.Id, TestCaseId = script.TestCaseId, Platform = null,
+                Status = outcome.Status, IsAutomated = true, ExecutedBy = "Automated (Test Case Hub native runner)",
+                Notes = outcome.Error ?? string.Join(" | ", outcome.Log.TakeLast(3)),
+                RunAttemptKey = $"native:{script.Id}:v{script.Version}:{Guid.NewGuid():N}"
+            };
+            result = await _store.AddTestRunResultAsync(result);
+            resultId = result.Id;
+            if (outcome.Status == "Fail")
+                await _notify.NotifyAdminsAndLeadsAsync("AutomationFailed", $"Native run failed for {script.TestCaseId} in run '{run.Name}'.");
+        }
+
+        return Ok(new ExecuteAutomationScriptResponse(outcome.Passed, outcome.Status, outcome.Log, outcome.Error, resultId));
     }
 }

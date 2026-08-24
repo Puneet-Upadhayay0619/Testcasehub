@@ -214,6 +214,13 @@ public class EfCoreDataStore : IDataStore
         await _db.SaveChangesAsync();
         return script;
     }
+    public async Task<AutomationScript> SetExecutionDefinitionAsync(int id, string executionDefinitionJson)
+    {
+        var script = await _db.AutomationScripts.FirstAsync(s => s.Id == id);
+        script.ExecutionDefinitionJson = executionDefinitionJson;
+        await _db.SaveChangesAsync();
+        return script;
+    }
 
     public Task<CompanyAiSettings?> GetCompanyAiSettingsAsync(int companyId) => _db.CompanyAiSettings.FirstOrDefaultAsync(a => a.CompanyId == companyId);
     public async Task<CompanyAiSettings> UpsertCompanyAiSettingsAsync(CompanyAiSettings settings)

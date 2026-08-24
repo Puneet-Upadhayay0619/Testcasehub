@@ -707,6 +707,15 @@ public class JsonFileDataStore : IDataStore
             return script;
         });
 
+    public Task<AutomationScript> SetExecutionDefinitionAsync(int id, string executionDefinitionJson) =>
+        WithLockAsync(async () =>
+        {
+            var script = _data.AutomationScripts.First(s => s.Id == id);
+            script.ExecutionDefinitionJson = executionDefinitionJson;
+            await PersistAsync();
+            return script;
+        });
+
     public Task<CompanyAiSettings?> GetCompanyAiSettingsAsync(int companyId) =>
         WithLockAsync(async () => _data.CompanyAiSettings.FirstOrDefault(a => a.CompanyId == companyId));
 
