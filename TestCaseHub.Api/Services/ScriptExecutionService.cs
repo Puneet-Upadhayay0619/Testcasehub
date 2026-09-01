@@ -320,9 +320,18 @@ public class ScriptExecutionService
     private async Task RunSqlForEachStepAsync(ExecStep step, EnvironmentTarget env, Dictionary<string, JsonElement> vars, List<string> log, ExecutionMode mode)
     {
         if (string.IsNullOrWhiteSpace(step.Query)) throw new InvalidOperationException("sqlForEach step has no Query.");
-        var rowsVar = GetVar(vars, step.Source);
-        if (rowsVar.ValueKind != JsonValueKind.Array)
-            throw new InvalidOperationException($"sqlForEach step's Source '{step.Source}' did not resolve to an array.");
+
+        // sqlForEach is very often AlwaysRun=true (a restore/teardown step) whose Source was
+        // meant to be captured by an EARLIER step -- but if that earlier capture step itself
+        // failed (e.g. a real DB connection error), it never got the chance to save anything,
+        // so the variable genuinely doesn't exist. That's not a bug in THIS step: there's
+        // nothing to restore, so treat a missing/non-array Source as "0 rows" and move on,
+        // rather than throwing a confusing "unknown variable" error on top of the real failure.
+        if (string.IsNullOrEmpty(step.Source) || !vars.TryGetValue(step.Source, out var rowsVar) || rowsVar.ValueKind != JsonValueKind.Array)
+        {
+            log.Add($"SKIP sqlForEach ({step.Label ?? "sqlForEach"}): Source '{step.Source}' was never captured (an earlier step likely failed before it could run) -- nothing to restore.");
+            return;
+        }
 
         if (mode == ExecutionMode.Mock)
         {
