@@ -109,6 +109,21 @@ public class AutomationScriptsController : ControllerBase
 
         return Ok(AutomationScriptResponse.From(script));
     }
+
+    // Smoke/Sanity/Regression tagging (see TestTier) -- same Contributor+ bar as other script
+    // edits, not the higher Approve bar, since this is just organizational metadata.
+    [HttpPatch("{id:int}/tier")]
+    public async Task<ActionResult<AutomationScriptResponse>> SetTier(int id, UpdateAutomationScriptTierRequest req)
+    {
+        if (!User.CanManageAutomationScripts()) return Forbid();
+        var script = await _store.GetAutomationScriptAsync(id);
+        if (script is null) return NotFound("Automation script not found.");
+        if (!User.HasCompanyAccess(script.CompanyId)) return Forbid();
+        if (!TestTier.All.Contains(req.TestTier)) return BadRequest("TestTier must be Smoke, Sanity, or Regression.");
+
+        script = await _store.SetTestTierAsync(id, req.TestTier);
+        return Ok(AutomationScriptResponse.From(script));
+    }
 // "Direct API" generation path (agreed alongside the existing MCP-based one): calls Claude
     // server-side using the company's own Anthropic key (CompanyAiSettingsController), grounded
     // in real source code fetched from the module's linked repo(s). Lead-and-above only -- this
@@ -212,7 +227,8 @@ public class AutomationScriptsController : ControllerBase
                 return BadRequest(new { error = $"'{env.Name}' is a Production environment -- automated execution results cannot be recorded against Production." });
         }
 
-        var outcome = await _execSvc.ExecuteAsync(script, env, cred);
+        var mode = ParseExecutionMode(req.Mode);
+        var outcome = await _execSvc.ExecuteAsync(script, env, cred, mode);
 
         int? resultId = null;
         if (run is not null && !string.IsNullOrEmpty(script.TestCaseId))
@@ -232,4 +248,70 @@ public class AutomationScriptsController : ControllerBase
 
         return Ok(new ExecuteAutomationScriptResponse(outcome.Passed, outcome.Status, outcome.Log, outcome.Error, resultId));
     }
+
+    // "Run tier" -- runs every Approved, execution-ready script in a Module+TestTier one after
+    // another against the same EnvironmentTarget/credential/mode, so a Lead can pick "which
+    // KIND of testing" (Smoke vs Sanity vs Regression, Real vs Mock) instead of clicking Run on
+    // one script at a time. Same permission/safety bar as the single-script Execute above.
+    [HttpPost("execute-batch")]
+    public async Task<ActionResult<ExecuteBatchResponse>> ExecuteBatch(ExecuteBatchRequest req, [FromQuery] int? companyId = null)
+    {
+        if (!User.CanTriggerTestRun()) return Forbid();
+        var effective = User.ResolveActingCompanyId(companyId);
+        if (effective is null) return User.IsSuperAdmin() ? BadRequest("SuperAdmin must specify ?companyId=.") : Forbid();
+        if (!TestTier.All.Contains(req.TestTier)) return BadRequest("TestTier must be Smoke, Sanity, or Regression.");
+
+        var env = await _store.GetEnvironmentTargetAsync(req.EnvironmentTargetId);
+        if (env is null || env.CompanyId != effective.Value) return BadRequest("EnvironmentTargetId not found for this company.");
+
+        EnvironmentCredential? cred = null;
+        if (req.EnvironmentCredentialId is not null)
+        {
+            cred = await _store.GetEnvironmentCredentialAsync(req.EnvironmentCredentialId.Value);
+            if (cred is null || cred.EnvironmentTargetId != env.Id) return BadRequest("EnvironmentCredentialId must belong to the selected EnvironmentTargetId.");
+        }
+
+        TestRun? run = null;
+        if (req.TestRunId is not null)
+        {
+            run = await _store.GetTestRunAsync(req.TestRunId.Value);
+            if (run is null || run.CompanyId != effective.Value) return BadRequest("TestRunId not found for this company.");
+            if (env.EnvironmentType == Models.EnvironmentType.Production)
+                return BadRequest(new { error = $"'{env.Name}' is a Production environment -- automated execution results cannot be recorded against Production." });
+        }
+
+        var mode = ParseExecutionMode(req.Mode);
+        var candidates = (await _store.GetAutomationScriptsAsync(effective.Value, req.ModuleId, null, null))
+            .Where(s => s.TestTier == req.TestTier && s.Status == AutomationScriptStatus.Approved && !string.IsNullOrWhiteSpace(s.ExecutionDefinitionJson))
+            .ToList();
+
+        var items = new List<ExecuteBatchItemResult>();
+        foreach (var script in candidates)
+        {
+            var outcome = await _execSvc.ExecuteAsync(script, env, cred, mode);
+            int? resultId = null;
+            if (run is not null && !string.IsNullOrEmpty(script.TestCaseId))
+            {
+                var result = new TestRunResult
+                {
+                    TestRunId = run.Id, TestCaseId = script.TestCaseId, Platform = null,
+                    Status = outcome.Status, IsAutomated = true, ExecutedBy = $"Automated (Test Case Hub native runner -- {req.TestTier} batch)",
+                    Notes = outcome.Error ?? string.Join(" | ", outcome.Log.TakeLast(3)),
+                    RunAttemptKey = $"native-batch:{script.Id}:v{script.Version}:{Guid.NewGuid():N}"
+                };
+                result = await _store.AddTestRunResultAsync(result);
+                resultId = result.Id;
+            }
+            items.Add(new ExecuteBatchItemResult(script.Id, script.TestCaseId, script.FileName, outcome.Passed, outcome.Status, outcome.Error, resultId));
+        }
+
+        var failed = items.Count(i => !i.Passed);
+        if (failed > 0)
+            await _notify.NotifyAdminsAndLeadsAsync("AutomationFailed", $"{req.TestTier} batch run: {failed}/{items.Count} script(s) failed in module {req.ModuleId}.");
+
+        return Ok(new ExecuteBatchResponse(items.Count, items.Count - failed, failed, 0, items));
+    }
+
+    private static ExecutionMode ParseExecutionMode(string? mode) =>
+        string.Equals(mode, "Mock", StringComparison.OrdinalIgnoreCase) ? ExecutionMode.Mock : ExecutionMode.Real;
 }

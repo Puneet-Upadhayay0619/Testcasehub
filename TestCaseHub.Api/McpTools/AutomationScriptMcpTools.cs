@@ -194,8 +194,8 @@ public class AutomationScriptMcpTools
     }
 
     [McpServerTool(Name = "execute_automation_script"),
-     Description("Runs a saved automation script NATIVELY, in-process on Test Case Hub's own backend, against a configured EnvironmentTarget (and optionally a named EnvironmentCredential for auth) -- no external Playwright/Node process, nothing for the user to download or run themselves. Requires the script to already have an execution definition set (see set_automation_script_execution_definition) -- otherwise this returns a 'Blocked' status explaining that. Requires Lead role or above (same bar as triggering any Test Run). If testRunId is given, the Pass/Fail/Blocked outcome is also recorded as a TestRunResult against that run, exactly like a CI's automated result post -- including the same Production-environment safety block.")]
-    public async Task<object> ExecuteAutomationScript(ClaimsPrincipal user, int scriptId, int environmentTargetId, int? environmentCredentialId = null, int? testRunId = null)
+     Description("Runs a saved automation script NATIVELY, in-process on Test Case Hub's own backend, against a configured EnvironmentTarget (and optionally a named EnvironmentCredential for auth) -- no external Playwright/Node process, nothing for the user to download or run themselves. Requires the script to already have an execution definition set (see set_automation_script_execution_definition) -- otherwise this returns a 'Blocked' status explaining that. Requires Lead role or above (same bar as triggering any Test Run). If testRunId is given, the Pass/Fail/Blocked outcome is also recorded as a TestRunResult against that run, exactly like a CI's automated result post -- including the same Production-environment safety block. mode: 'Real' (default, hits the live environment) or 'Mock' (every step must define its own MockResponse/MockRows -- no real network/DB call is made, useful for validating assertion logic against fixture data independent of live environment state).")]
+    public async Task<object> ExecuteAutomationScript(ClaimsPrincipal user, int scriptId, int environmentTargetId, int? environmentCredentialId = null, int? testRunId = null, string? mode = null)
     {
         if (!user.CanTriggerTestRun())
             return new { error = "You do not have permission to trigger automation runs (Lead role or above required)." };
@@ -223,7 +223,8 @@ public class AutomationScriptMcpTools
                 return new { error = $"'{env.Name}' is a Production environment -- automated execution results cannot be recorded against Production." };
         }
 
-        var outcome = await _execSvc.ExecuteAsync(script, env, cred);
+        var execMode = string.Equals(mode, "Mock", StringComparison.OrdinalIgnoreCase) ? ExecutionMode.Mock : ExecutionMode.Real;
+        var outcome = await _execSvc.ExecuteAsync(script, env, cred, execMode);
 
         int? resultId = null;
         if (run is not null && !string.IsNullOrEmpty(script.TestCaseId))

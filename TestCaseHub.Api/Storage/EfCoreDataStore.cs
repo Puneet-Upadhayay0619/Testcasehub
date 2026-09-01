@@ -232,6 +232,14 @@ public class EfCoreDataStore : IDataStore
         return script;
     }
 
+    public async Task<AutomationScript> SetTestTierAsync(int id, string testTier)
+    {
+        var script = await _db.AutomationScripts.FirstAsync(s => s.Id == id);
+        script.TestTier = testTier;
+        await _db.SaveChangesAsync();
+        return script;
+    }
+
     public Task<CompanyAiSettings?> GetCompanyAiSettingsAsync(int companyId) => _db.CompanyAiSettings.FirstOrDefaultAsync(a => a.CompanyId == companyId);
     public async Task<CompanyAiSettings> UpsertCompanyAiSettingsAsync(CompanyAiSettings settings)
     {

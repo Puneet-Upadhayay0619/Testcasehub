@@ -111,6 +111,7 @@ public class EnvironmentsController : ControllerBase
         if (req.TestCompanyId is not null) env.TestCompanyId = req.TestCompanyId;
         if (req.TestCompanyBId is not null) env.TestCompanyBId = req.TestCompanyBId;
         if (req.TestReservedModuleEnum is not null) env.TestReservedModuleEnum = req.TestReservedModuleEnum;
+        if (req.AllowDestructiveTestSql is not null) env.AllowDestructiveTestSql = req.AllowDestructiveTestSql.Value;
         env = await _store.UpdateEnvironmentTargetAsync(env);
         return EnvironmentTargetResponse.From(env);
     }

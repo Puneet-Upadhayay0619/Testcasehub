@@ -547,6 +547,15 @@ let state = {
   runScriptTestRunId: '',
   runScriptBusy: false,
   runScriptResult: null,
+  runScriptMode: 'Real',
+  showTierRun: false,
+  tierRunTier: 'Smoke',
+  tierRunEnvId: '',
+  tierRunCredId: '',
+  tierRunTestRunId: '',
+  tierRunMode: 'Real',
+  tierRunBusy: false,
+  tierRunResult: null,
   automationBatchLayer: '',
   automationBatchVerificationType: '',
   automationBatchSelectedIds: [],
@@ -2095,7 +2104,8 @@ async function saveTestCompanyConfig(envId){
   const body = {
     testCompanyId: v('envTestCompanyId_' + envId),
     testCompanyBId: v('envTestCompanyBId_' + envId),
-    testReservedModuleEnum: v('envTestReservedModule_' + envId)
+    testReservedModuleEnum: v('envTestReservedModule_' + envId),
+    allowDestructiveTestSql: document.getElementById('envAllowDestructiveSql_' + envId).checked
   };
   try{
     const updated = await apiFetch('/api/environments/' + envId + '/test-company-id', { method:'PATCH', body: JSON.stringify(body) });
@@ -2201,6 +2211,13 @@ function renderEnvironments(){
             <div class="field"><label>Test Company Id</label><input type="number" id="envTestCompanyId_${e.id}" value="${e.testCompanyId ?? ''}"></div>
             <div class="field"><label>Test Company B Id (cross-company checks)</label><input type="number" id="envTestCompanyBId_${e.id}" value="${e.testCompanyBId ?? ''}"></div>
             <div class="field"><label>Reserved test Module Enum</label><input type="number" id="envTestReservedModule_${e.id}" value="${e.testReservedModuleEnum ?? ''}"></div>
+          </div>
+          <div class="field" style="margin-top:8px;">
+            <label style="color:${e.allowDestructiveTestSql?'#b00':'inherit'};">
+              <input type="checkbox" id="envAllowDestructiveSql_${e.id}" ${e.allowDestructiveTestSql?'checked':''}>
+              Allow destructive test SQL (DELETE/UPDATE/INSERT/etc.) on this environment
+            </label>
+            <p class="sub" style="margin:2px 0 0;">Off by default. A script step whose SQL looks destructive is refused until this is checked -- exists so a misconfigured Test Company Id above can never silently touch another real company's data. Only turn this on for an environment/company you've verified is safe to write to.</p>
           </div>
           <div class="actions-row"><button type="button" class="small" data-save-test-company="${e.id}">Save test data config</button></div>
         ` : ''}
@@ -2366,19 +2383,47 @@ async function updateAutomationScriptStatus(id, status){
   } catch(err){ showToast('Could not update status: ' + err.message, 'error'); }
 }
 async function executeAutomationScript(scriptId){
-  if(!state.runScriptEnvId){ showToast('Pick an Environment Target first.', 'error'); return; }
+  if(state.runScriptMode !== 'Mock' && !state.runScriptEnvId){ showToast('Pick an Environment Target first.', 'error'); return; }
   state.runScriptBusy = true; state.runScriptResult = null; render();
   try{
     const body = {
-      environmentTargetId: Number(state.runScriptEnvId),
+      environmentTargetId: Number(state.runScriptEnvId) || 0,
       environmentCredentialId: state.runScriptCredId ? Number(state.runScriptCredId) : null,
-      testRunId: state.runScriptTestRunId ? Number(state.runScriptTestRunId) : null
+      testRunId: state.runScriptTestRunId ? Number(state.runScriptTestRunId) : null,
+      mode: state.runScriptMode || 'Real'
     };
     const result = await apiFetch('/api/automation-scripts/' + scriptId + '/execute', { method:'POST', body: JSON.stringify(body) });
     state.runScriptResult = Object.assign({ scriptId }, result);
     showToast('Run finished: ' + result.status + '.', result.passed ? 'success' : 'error');
   } catch(err){ showToast('Could not run script: ' + err.message, 'error'); }
   state.runScriptBusy = false; render();
+}
+async function updateAutomationScriptTier(id, testTier){
+  try{
+    const updated = await apiFetch('/api/automation-scripts/' + id + '/tier', { method:'PATCH', body: JSON.stringify({ testTier }) });
+    DATA.automationScripts = (DATA.automationScripts||[]).map(s => s.id === id ? updated : s);
+    render();
+    showToast('Tier set to ' + testTier + '.', 'success');
+  } catch(err){ showToast('Could not update tier: ' + err.message, 'error'); }
+}
+async function executeTierBatch(){
+  if(!state.automationScriptsModuleId){ showToast('Pick a module first.', 'error'); return; }
+  if(state.tierRunMode !== 'Mock' && !state.tierRunEnvId){ showToast('Pick an Environment Target first.', 'error'); return; }
+  state.tierRunBusy = true; state.tierRunResult = null; render();
+  try{
+    const body = {
+      moduleId: Number(state.automationScriptsModuleId),
+      testTier: state.tierRunTier,
+      environmentTargetId: Number(state.tierRunEnvId) || 0,
+      environmentCredentialId: state.tierRunCredId ? Number(state.tierRunCredId) : null,
+      testRunId: state.tierRunTestRunId ? Number(state.tierRunTestRunId) : null,
+      mode: state.tierRunMode || 'Real'
+    };
+    const result = await apiFetch('/api/automation-scripts/execute-batch', { method:'POST', body: JSON.stringify(body) });
+    state.tierRunResult = result;
+    showToast(state.tierRunTier + ' run finished: ' + result.passed + '/' + result.total + ' passed.', result.failed === 0 ? 'success' : 'error');
+  } catch(err){ showToast('Could not run tier: ' + err.message, 'error'); }
+  state.tierRunBusy = false; render();
 }
 async function generateAutomationScript(){
   if(!state.automationScriptsModuleId || !state.automationScriptsTestCaseId.trim()){
@@ -2497,7 +2542,7 @@ function renderRunScriptPanel(s){
   const creds = envId ? (DATA.environmentCredentials[envId]||[]) : [];
   const result = state.runScriptResult && state.runScriptResult.scriptId === s.id ? state.runScriptResult : null;
   return `
-    <tr><td colspan="6">
+    <tr><td colspan="7">
       <div style="border:1px solid var(--border,#ddd);border-radius:6px;padding:10px;">
         <p class="sub" style="margin-top:0;">Runs natively inside Test Case Hub -- no external Playwright/Node process, nothing to download. Picks up the environment's Master DB connection and, if selected, a named credential's stored token for Authorization.</p>
         <div class="grid2">
@@ -2519,9 +2564,15 @@ function renderRunScriptPanel(s){
               ${(DATA.testRuns||[]).map(r=>`<option value="${r.id}" ${String(r.id)===String(state.runScriptTestRunId)?'selected':''}>${escapeHtml(r.name)}</option>`).join('')}
             </select>
           </div>
+          <div class="field"><label>Mode</label>
+            <select id="runScriptMode_${s.id}">
+              <option value="Real" ${state.runScriptMode!=='Mock'?'selected':''}>Real -- hits the live environment</option>
+              <option value="Mock" ${state.runScriptMode==='Mock'?'selected':''}>Mock -- uses each step's canned data, no real network/DB call</option>
+            </select>
+          </div>
         </div>
         <div class="actions-row">
-          <button type="button" data-execute-script="${s.id}" ${(state.runScriptBusy || !envId)?'disabled':''}>${state.runScriptBusy ? 'Running…' : 'Run now'}</button>
+          <button type="button" data-execute-script="${s.id}" ${(state.runScriptBusy || (state.runScriptMode!=='Mock' && !envId))?'disabled':''}>${state.runScriptBusy ? 'Running…' : 'Run now'}</button>
         </div>
         ${result ? `
           <div style="margin-top:8px;">
@@ -2538,6 +2589,72 @@ function renderRunScriptPanel(s){
   `;
 }
 
+function renderTierRunPanel(){
+  const creds = state.tierRunEnvId ? (DATA.environmentCredentials[state.tierRunEnvId]||[]) : [];
+  const r = state.tierRunResult;
+  return `
+    <div style="border:1px solid var(--border,#ddd);border-radius:6px;padding:10px;margin-top:10px;">
+      <div class="actions-row" style="margin-top:0;">
+        <button type="button" class="secondary small" id="toggleTierRun">${state.showTierRun ? 'Cancel' : 'Run a tier (Smoke / Sanity / Regression)'}</button>
+      </div>
+      ${state.showTierRun ? `
+        <p class="sub" style="margin:4px 0 8px;">Runs every Approved, execution-ready script in this module tagged with the chosen tier, one after another -- pick what KIND of testing you want (a quick Smoke check, a Sanity re-check of one area, or the full Regression sweep) and whether it should hit the real environment or run in Mock mode against each step's own fixture data.</p>
+        <div class="grid2">
+          <div class="field"><label>Tier</label>
+            <select id="tierRunTierSelect">
+              <option value="Smoke" ${state.tierRunTier==='Smoke'?'selected':''}>Smoke</option>
+              <option value="Sanity" ${state.tierRunTier==='Sanity'?'selected':''}>Sanity</option>
+              <option value="Regression" ${state.tierRunTier==='Regression'?'selected':''}>Regression</option>
+            </select>
+          </div>
+          <div class="field"><label>Mode</label>
+            <select id="tierRunModeSelect">
+              <option value="Real" ${state.tierRunMode!=='Mock'?'selected':''}>Real -- hits the live environment</option>
+              <option value="Mock" ${state.tierRunMode==='Mock'?'selected':''}>Mock -- each step's own canned data, no real network/DB call</option>
+            </select>
+          </div>
+          <div class="field"><label>Environment Target${state.tierRunMode==='Mock'?' (optional in Mock mode)':''}</label>
+            <select id="tierRunEnvSelect">
+              <option value="">Select…</option>
+              ${(DATA.environments||[]).map(e=>`<option value="${e.id}" ${String(e.id)===String(state.tierRunEnvId)?'selected':''}>${escapeHtml(e.name)} (${escapeHtml(e.environmentType)})</option>`).join('')}
+            </select>
+          </div>
+          <div class="field"><label>Run as credential (optional)</label>
+            <select id="tierRunCredSelect" ${!state.tierRunEnvId?'disabled':''}>
+              <option value="">None</option>
+              ${creds.map(c=>`<option value="${c.id}" ${String(c.id)===String(state.tierRunCredId)?'selected':''}>${escapeHtml(c.label)}${c.tag?' — '+escapeHtml(c.tag):''}</option>`).join('')}
+            </select>
+          </div>
+          <div class="field"><label>Record into Test Run (optional)</label>
+            <select id="tierRunTestRunSelect">
+              <option value="">Don't record -- just show results here</option>
+              ${(DATA.testRuns||[]).map(tr=>`<option value="${tr.id}" ${String(tr.id)===String(state.tierRunTestRunId)?'selected':''}>${escapeHtml(tr.name)}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+        <div class="actions-row">
+          <button type="button" id="executeTierRunBtn" ${(state.tierRunBusy || (state.tierRunMode!=='Mock' && !state.tierRunEnvId))?'disabled':''}>${state.tierRunBusy ? 'Running…' : 'Run ' + state.tierRunTier}</button>
+        </div>
+        ${r ? `
+          <div style="margin-top:8px;">
+            <strong>${r.passed}/${r.total} passed</strong>${r.failed ? ` — <span style="color:#b00;">${r.failed} failed</span>` : ''}
+            <table style="margin-top:6px;">
+              <thead><tr><th>Script</th><th>Test Case</th><th>Status</th><th>Error</th></tr></thead>
+              <tbody>
+                ${r.items.map(i => `<tr>
+                  <td>${escapeHtml(i.fileName)}</td>
+                  <td>${escapeHtml(i.testCaseId||'')}</td>
+                  <td><span class="${badgeClass('s', i.status)}">${escapeHtml(i.status)}</span></td>
+                  <td>${i.error ? escapeHtml(i.error) : ''}</td>
+                </tr>`).join('')}
+              </tbody>
+            </table>
+          </div>
+        ` : ''}
+      ` : ''}
+    </div>
+  `;
+}
 function renderAutomationScripts(){
   const rows = (DATA.automationScripts||[]).map(s => `
     <tr>
@@ -2555,13 +2672,22 @@ function renderAutomationScripts(){
       </td>
       <td>${escapeHtml(s.generatedBy||'')}</td>
       <td>
+        ${canEditContent() ? `
+          <select data-script-tier="${s.id}">
+            <option value="Smoke" ${s.testTier==='Smoke'?'selected':''}>Smoke</option>
+            <option value="Sanity" ${s.testTier==='Sanity'?'selected':''}>Sanity</option>
+            <option value="Regression" ${s.testTier==='Regression'?'selected':''}>Regression</option>
+          </select>
+        ` : `<span class="badge">${escapeHtml(s.testTier||'Regression')}</span>`}
+      </td>
+      <td>
         <button type="button" class="small ghost" data-view-script="${s.id}">${state.viewingScriptId===s.id?'Hide':'View'}</button>
         ${canSeeAutomationMenu() ? (s.hasExecutionDefinition
           ? `<button type="button" class="small ghost" data-toggle-run-script="${s.id}">${state.runningScriptId===s.id?'Hide':'Run'}</button>`
           : `<span class="sub" title="No native execution definition set for this script yet">Run n/a</span>`) : ''}
       </td>
     </tr>
-    ${state.viewingScriptId===s.id ? `<tr><td colspan="6"><textarea readonly style="width:100%;min-height:220px;font-family:monospace;font-size:12px;">${escapeHtml(s.content)}</textarea></td></tr>` : ''}
+    ${state.viewingScriptId===s.id ? `<tr><td colspan="7"><textarea readonly style="width:100%;min-height:220px;font-family:monospace;font-size:12px;">${escapeHtml(s.content)}</textarea></td></tr>` : ''}
     ${state.runningScriptId===s.id ? renderRunScriptPanel(s) : ''}
   `).join('');
   return `
@@ -2584,9 +2710,10 @@ function renderAutomationScripts(){
         <p class="sub" style="margin-top:-4px;">Requires Lead role or above, and an Anthropic key configured under AI Settings — otherwise use the MCP-based flow instead.</p>
         ${state.automationScriptsModuleId ? renderBatchGeneratePanel() : ''}
       ` : ''}
+      ${state.automationScriptsModuleId && canSeeAutomationMenu() ? renderTierRunPanel() : ''}
       <table style="margin-top:14px;">
-        <thead><tr><th>File</th><th>Framework</th><th>Version</th><th>Status</th><th>Generated by</th><th></th></tr></thead>
-        <tbody>${!state.automationScriptsModuleId ? '<tr><td colspan="6" class="empty">Select a module to see its saved scripts.</td></tr>' : (state.automationScriptsLoading ? '<tr><td colspan="6" class="empty">Loading…</td></tr>' : (rows || '<tr><td colspan="6" class="empty">No scripts saved for this module yet.</td></tr>'))}</tbody>
+        <thead><tr><th>File</th><th>Framework</th><th>Version</th><th>Status</th><th>Generated by</th><th>Tier</th><th></th></tr></thead>
+        <tbody>${!state.automationScriptsModuleId ? '<tr><td colspan="7" class="empty">Select a module to see its saved scripts.</td></tr>' : (state.automationScriptsLoading ? '<tr><td colspan="7" class="empty">Loading…</td></tr>' : (rows || '<tr><td colspan="7" class="empty">No scripts saved for this module yet.</td></tr>'))}</tbody>
       </table>
       <div class="actions-row"><button type="button" class="ghost" id="closeAutomationScripts">Close</button></div>
     </div>
@@ -4062,9 +4189,35 @@ function wireEvents(){
   document.querySelectorAll('[id^="runScriptTestRun_"]').forEach(el => el.addEventListener('change', (e) => {
     state.runScriptTestRunId = e.target.value;
   }));
+  document.querySelectorAll('[id^="runScriptMode_"]').forEach(el => el.addEventListener('change', (e) => {
+    state.runScriptMode = e.target.value;
+    render();
+  }));
   document.querySelectorAll('[data-execute-script]').forEach(el => el.addEventListener('click', () => {
     executeAutomationScript(Number(el.dataset.executeScript));
   }));
+  document.querySelectorAll('[data-script-tier]').forEach(el => el.addEventListener('change', (e) => {
+    updateAutomationScriptTier(Number(el.dataset.scriptTier), e.target.value);
+  }));
+  const toggleTierRun = document.getElementById('toggleTierRun');
+  if(toggleTierRun) toggleTierRun.addEventListener('click', () => { state.showTierRun = !state.showTierRun; state.tierRunResult = null; render(); });
+  const tierRunTierSelect = document.getElementById('tierRunTierSelect');
+  if(tierRunTierSelect) tierRunTierSelect.addEventListener('change', (e) => { state.tierRunTier = e.target.value; });
+  const tierRunEnvSelect = document.getElementById('tierRunEnvSelect');
+  if(tierRunEnvSelect) tierRunEnvSelect.addEventListener('change', (e) => {
+    state.tierRunEnvId = e.target.value;
+    state.tierRunCredId = '';
+    render();
+    if(state.tierRunEnvId) loadEnvironmentCredentials(state.tierRunEnvId).then(render);
+  });
+  const tierRunCredSelect = document.getElementById('tierRunCredSelect');
+  if(tierRunCredSelect) tierRunCredSelect.addEventListener('change', (e) => { state.tierRunCredId = e.target.value; });
+  const tierRunTestRunSelect = document.getElementById('tierRunTestRunSelect');
+  if(tierRunTestRunSelect) tierRunTestRunSelect.addEventListener('change', (e) => { state.tierRunTestRunId = e.target.value; });
+  const tierRunModeSelect = document.getElementById('tierRunModeSelect');
+  if(tierRunModeSelect) tierRunModeSelect.addEventListener('change', (e) => { state.tierRunMode = e.target.value; render(); });
+  const executeTierRunBtn = document.getElementById('executeTierRunBtn');
+  if(executeTierRunBtn) executeTierRunBtn.addEventListener('click', () => { executeTierBatch(); });
   const generateScriptBtn = document.getElementById('generateScriptBtn');
   if(generateScriptBtn) generateScriptBtn.addEventListener('click', () => { generateAutomationScript(); });
   const automationBatchLayerSelect = document.getElementById('automationBatchLayerSelect');

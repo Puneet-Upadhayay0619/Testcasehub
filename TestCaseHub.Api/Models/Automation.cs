@@ -75,6 +75,12 @@ public class EnvironmentTarget
     // without touching one of the 14 live-seeded production modules.
     public int? TestReservedModuleEnum { get; set; }
 
+    // Guardrail (agreed in planning): a "sql"/"sqlForEach" step whose query looks destructive
+    // (DELETE/UPDATE/INSERT/etc.) is refused by ScriptExecutionService unless this is explicitly
+    // true. Admin-only toggle, off by default -- exists specifically so a misconfigured
+    // TestCompanyId can never silently run destructive SQL against the wrong real company.
+    public bool AllowDestructiveTestSql { get; set; } = false;
+
     [MaxLength(256)]
     public string CreatedBy { get; set; } = "";
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;

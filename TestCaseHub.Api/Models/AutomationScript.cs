@@ -10,6 +10,19 @@ public static class AutomationScriptStatus
     public static readonly string[] All = { Draft, Reviewed, Approved };
 }
 
+// Smoke = a handful of representative scripts run right after every deploy to confirm native
+// execution is alive at all (wide, shallow). Sanity = re-running just the script(s) related to
+// whatever was just fixed (narrow, deep). Regression = the full suite, run periodically / before
+// a release (wide and deep). Agreed in planning alongside the Mock-mode and capture-and-restore
+// work -- lets "Run tier" batch-execute a whole group instead of one script at a time.
+public static class TestTier
+{
+    public const string Smoke = "Smoke";
+    public const string Sanity = "Sanity";
+    public const string Regression = "Regression";
+    public static readonly string[] All = { Smoke, Sanity, Regression };
+}
+
 // The whole point of this entity (per explicit instruction: "me company ke repo me save
 // kraunga to test case hub ka kya fayda?") is that a generated automation script lives HERE,
 // in Test Case Hub's own database -- retrievable company/module/suite-wise -- never pushed to
@@ -66,4 +79,10 @@ public class AutomationScript
     // documenting real-vs-spec gaps) is never lost or auto-generated away. Null/empty means
     // "not yet wired for native execution" -- Run stays disabled in the UI for that script.
     public string? ExecutionDefinitionJson { get; set; }
+
+    // Which test tier this script belongs to for batch "Run tier" execution -- see TestTier
+    // above. Defaults to Regression (the safest default: only runs when explicitly asked for the
+    // full suite, never accidentally swept into a "just run Smoke" quick check).
+    [MaxLength(16)]
+    public string TestTier { get; set; } = Models.TestTier.Regression;
 }

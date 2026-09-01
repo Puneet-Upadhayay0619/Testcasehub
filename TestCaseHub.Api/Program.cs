@@ -413,6 +413,13 @@ if (storageMode == "SqlServer")
             @"ALTER TABLE ""EnvironmentTargets"" ADD COLUMN IF NOT EXISTS ""TestCompanyBId"" integer NULL;",
             @"ALTER TABLE ""EnvironmentTargets"" ADD COLUMN IF NOT EXISTS ""TestReservedModuleEnum"" integer NULL;",
 
+            // Guardrail + tiering (agreed in planning alongside Mock mode and capture-and-restore):
+            // an Admin must explicitly opt an EnvironmentTarget into destructive test SQL before
+            // any DELETE/UPDATE/etc. step runs against it; every AutomationScript gets a
+            // Smoke/Sanity/Regression tier (default Regression) for batch "Run tier" execution.
+            @"ALTER TABLE ""EnvironmentTargets"" ADD COLUMN IF NOT EXISTS ""AllowDestructiveTestSql"" boolean NOT NULL DEFAULT false;",
+            @"ALTER TABLE ""AutomationScripts"" ADD COLUMN IF NOT EXISTS ""TestTier"" varchar(16) NOT NULL DEFAULT 'Regression';",
+
             // Data Protection key ring storage (see PostgresXmlRepository.cs) -- must exist
             // before AddDataProtection() tries to read/write keys through it.
             @"CREATE TABLE IF NOT EXISTS ""DataProtectionKeys"" (
@@ -492,14 +499,18 @@ using (var seedScope = app.Services.CreateScope())
         await seedStore.AddTeamModuleAsync(defaultTeam.Id, m.Id);
 
     // Native execution definitions for the 19 Approved UWMC scripts (see
-    // Data/UwmcExecutionDefinitions.cs) -- idempotent: only fills in scripts that don't already
-    // have one, so a manually-edited definition is never overwritten by a redeploy. Scoped to
-    // module id 8 (UWMC) wherever it lives; safe no-op if that module/company doesn't exist yet
-    // (e.g. a brand-new deployment with no UWMC data at all).
+    // Data/UwmcExecutionDefinitions.cs) -- kept in sync with code on every startup (not just
+    // "fill if blank") because these definitions are still actively being corrected against real
+    // live-test findings (e.g. DSH-031/DSH-046 needed a cleanup step added after live testing
+    // showed they need a company with zero pre-existing saved config to be meaningful at all).
+    // There is no UI for hand-editing a definition, so "code is the source of truth, always
+    // resync" is safe -- nothing else can have changed it. Scoped to module id 8 (UWMC)
+    // wherever it lives; safe no-op if that module/company doesn't exist yet.
     foreach (var company in await seedStore.GetCompaniesAsync())
     {
         var uwmcScripts = (await seedStore.GetAutomationScriptsAsync(company.Id, moduleId: null, suiteId: null, testCaseId: null))
-            .Where(s => TestCaseHub.Api.Data.UwmcExecutionDefinitions.ByTestCaseId.ContainsKey(s.TestCaseId ?? "") && string.IsNullOrWhiteSpace(s.ExecutionDefinitionJson));
+            .Where(s => TestCaseHub.Api.Data.UwmcExecutionDefinitions.ByTestCaseId.ContainsKey(s.TestCaseId ?? "")
+                && s.ExecutionDefinitionJson != TestCaseHub.Api.Data.UwmcExecutionDefinitions.ByTestCaseId[s.TestCaseId!]);
         foreach (var script in uwmcScripts)
             await seedStore.SetExecutionDefinitionAsync(script.Id, TestCaseHub.Api.Data.UwmcExecutionDefinitions.ByTestCaseId[script.TestCaseId!]);
     }

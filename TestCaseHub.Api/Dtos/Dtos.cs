@@ -141,19 +141,19 @@ public record ApiKeyResponse(int Id, string Name, string Scope, bool Revoked, st
 public record IssuedApiKeyResponse(int Id, string Name, string RawKey);
 
 public record CreateEnvironmentTargetRequest(string Name, string Tenant, string EnvironmentType, string DashboardBaseUrl, string AppApiBaseUrl, string AppBaseUrl, string? MasterDbConnectionString, string? TransactionDbConnectionString, string? ReportDbConnectionString, bool RequiresTestDataCleanup);
-public record EnvironmentTargetResponse(int Id, string Name, string Tenant, string EnvironmentType, string DashboardBaseUrl, string AppApiBaseUrl, string AppBaseUrl, bool HasMasterDbConnection, bool HasTransactionDbConnection, bool HasReportDbConnection, bool RequiresTestDataCleanup, int? TestCompanyId, int? TestCompanyBId, int? TestReservedModuleEnum, string CreatedBy, DateTime CreatedAt)
+public record EnvironmentTargetResponse(int Id, string Name, string Tenant, string EnvironmentType, string DashboardBaseUrl, string AppApiBaseUrl, string AppBaseUrl, bool HasMasterDbConnection, bool HasTransactionDbConnection, bool HasReportDbConnection, bool RequiresTestDataCleanup, int? TestCompanyId, int? TestCompanyBId, int? TestReservedModuleEnum, bool AllowDestructiveTestSql, string CreatedBy, DateTime CreatedAt)
 {
     public static EnvironmentTargetResponse From(TestCaseHub.Api.Models.EnvironmentTarget e) => new(
         e.Id, e.Name, e.Tenant, e.EnvironmentType, e.DashboardBaseUrl, e.AppApiBaseUrl, e.AppBaseUrl,
         !string.IsNullOrEmpty(e.MasterDbConnectionStringEncrypted), !string.IsNullOrEmpty(e.TransactionDbConnectionStringEncrypted), !string.IsNullOrEmpty(e.ReportDbConnectionStringEncrypted),
-        e.RequiresTestDataCleanup, e.TestCompanyId, e.TestCompanyBId, e.TestReservedModuleEnum, e.CreatedBy, e.CreatedAt
+        e.RequiresTestDataCleanup, e.TestCompanyId, e.TestCompanyBId, e.TestReservedModuleEnum, e.AllowDestructiveTestSql, e.CreatedBy, e.CreatedAt
     );
 }
 // Sets the real FieldAssist tenant CompanyId(s)/reserved test module used to scope native
 // execution's SQL assertions -- separate from this Test Case Hub's own CompanyId, which lives in
 // a totally different numbering space (see EnvironmentTarget.TestCompanyId and friends). All
 // three optional so a caller can set just one without clobbering the others.
-public record SetTestCompanyIdRequest(int? TestCompanyId, int? TestCompanyBId, int? TestReservedModuleEnum);
+public record SetTestCompanyIdRequest(int? TestCompanyId, int? TestCompanyBId, int? TestReservedModuleEnum, bool? AllowDestructiveTestSql);
 
 public record RecordAutomatedResultRequest(string TestCaseId, string? Platform, string Status, string? Notes, string RunAttemptKey, int RetryCount);
 public record CreateBugFromResultResponse(bool Success, string? WorkItemId, string? WorkItemUrl, string? Error);
@@ -204,13 +204,14 @@ public record BatchGenerationResponse(int Requested, int Succeeded, int Failed, 
 
 public record SaveAutomationScriptRequest(int ModuleId, string? TestCaseId, int? SuiteId, string FileName, string? Framework, string Content, string? GeneratedBy, string? SourceRepoRefs);
 public record UpdateAutomationScriptStatusRequest(string Status);
-public record AutomationScriptResponse(int Id, int CompanyId, int ModuleId, string? TestCaseId, int? SuiteId, string FileName, string Framework, string Content, string Status, string GeneratedBy, DateTime GeneratedAt, int Version, string SourceRepoRefs, bool HasExecutionDefinition)
+public record AutomationScriptResponse(int Id, int CompanyId, int ModuleId, string? TestCaseId, int? SuiteId, string FileName, string Framework, string Content, string Status, string GeneratedBy, DateTime GeneratedAt, int Version, string SourceRepoRefs, bool HasExecutionDefinition, string TestTier)
 {
     public static AutomationScriptResponse From(TestCaseHub.Api.Models.AutomationScript s) => new(
         s.Id, s.CompanyId, s.ModuleId, s.TestCaseId, s.SuiteId, s.FileName, s.Framework, s.Content, s.Status, s.GeneratedBy, s.GeneratedAt, s.Version, s.SourceRepoRefs,
-        !string.IsNullOrWhiteSpace(s.ExecutionDefinitionJson)
+        !string.IsNullOrWhiteSpace(s.ExecutionDefinitionJson), s.TestTier
     );
 }
+public record UpdateAutomationScriptTierRequest(string TestTier);
 
 // Native execution (agreed: "test case hub se hi complete testing") -- set once per script by
 // whoever converts its Playwright logic into the step DSL, then re-used by every future Run.
@@ -220,8 +221,15 @@ public record SetExecutionDefinitionRequest(string ExecutionDefinitionJson);
 // authenticating as a named EnvironmentCredential, and optionally recording the outcome straight
 // into a TestRun -- the same TestRunResult row a human's "Record result" or a CI's
 // results/automated call would create, just posted by the interpreter itself.
-public record ExecuteAutomationScriptRequest(int EnvironmentTargetId, int? EnvironmentCredentialId, int? TestRunId);
+public record ExecuteAutomationScriptRequest(int EnvironmentTargetId, int? EnvironmentCredentialId, int? TestRunId, string? Mode);
 public record ExecuteAutomationScriptResponse(bool Passed, string Status, List<string> Log, string? Error, int? TestRunResultId);
+
+// Batch "Run tier" -- runs every Approved script in a Module+TestTier that has a native
+// execution definition, one after another, against the same EnvironmentTarget/credential/mode.
+// Mirrors the single-script Execute contract but returns one outcome per script plus a summary.
+public record ExecuteBatchRequest(int ModuleId, string TestTier, int EnvironmentTargetId, int? EnvironmentCredentialId, int? TestRunId, string? Mode);
+public record ExecuteBatchItemResult(int ScriptId, string? TestCaseId, string FileName, bool Passed, string Status, string? Error, int? TestRunResultId);
+public record ExecuteBatchResponse(int Total, int Passed, int Failed, int Skipped, List<ExecuteBatchItemResult> Items);
 
 // ---- Phase 8: multi-company, teams ----
 public record UpdateCompanyStatusRequest(string Status);

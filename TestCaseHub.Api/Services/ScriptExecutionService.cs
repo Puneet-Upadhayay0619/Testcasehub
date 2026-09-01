@@ -1,10 +1,17 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using Microsoft.Data.SqlClient;
 using TestCaseHub.Api.Models;
 
 namespace TestCaseHub.Api.Services;
+
+// Real (hits the live environment) or Mock (uses each step's canned MockResponse/MockRows,
+// touches no network/DB at all) -- lets a script's assertion LOGIC be validated deterministically
+// against fixture data, independent of whether a real company/environment happens to be in the
+// state the test assumes. Agreed in planning alongside Smoke/Sanity/Regression tiers.
+public enum ExecutionMode { Real, Mock }
 
 // One step of a script's native execution definition. This is a small, deliberately generic
 // DSL -- NOT a TypeScript interpreter -- that covers exactly the patterns the 19 (and 8
@@ -13,7 +20,13 @@ namespace TestCaseHub.Api.Services;
 // saved earlier. Every field is optional except Type -- which fields matter depends on it.
 public class ExecStep
 {
-    public string Type { get; set; } = ""; // "http" | "sql" | "assert"
+    public string Type { get; set; } = ""; // "http" | "sql" | "sqlForEach" | "assert"
+
+    // If true, this step still runs even after an earlier step in the same script has failed --
+    // meant for teardown/restore steps (e.g. "put back the rows a setup step deleted") so
+    // capture-and-restore is safe regardless of whether the test in between passed or failed.
+    // Normal steps stop running (fail-fast) the moment any prior step fails, same as before.
+    public bool AlwaysRun { get; set; } = false;
 
     // --- http ---
     public string? Method { get; set; }          // GET / POST
@@ -22,19 +35,29 @@ public class ExecStep
     public int? ExpectStatus { get; set; }         // if set, mismatch fails the step immediately
     public bool AuthRequired { get; set; } = true; // false for the "no Authorization header" DSH-027 case
     public string? SaveAs { get; set; }            // variable name -- stores { status, body, text }
+    // Mock mode only: canned response body substituted for the real HTTP call. Ignored in Real mode.
+    public JsonElement? MockResponse { get; set; }
 
-    // --- sql ---
+    // --- sql / sqlForEach ---
     public string? Database { get; set; }          // "Master" | "Transaction" | "Report" (default Master)
     public string? Query { get; set; }
     public Dictionary<string, JsonElement>? Params { get; set; }
     // SaveAs reused -- stores a JSON array of row objects (column name -> value)
+    // sqlForEach reuses Source (below) -- the saved variable (array of row objects, typically
+    // captured by an earlier "sql" SELECT) to iterate; Query runs once per row with every JSON
+    // property of that row bound as a same-named @param. This is what makes capture-and-restore
+    // generic: capture existing rows, mutate/delete them for the test, then (AlwaysRun=true)
+    // restore each one via an INSERT built straight from its own captured column values.
+    // Mock mode only: canned rows substituted for the real SELECT (or, for sqlForEach, just
+    // logged rather than executed -- Mock mode never touches a real DB). Ignored in Real mode.
+    public JsonElement? MockRows { get; set; }
 
     // --- assert ---
     public string? Source { get; set; }            // variable name to read
     public string? ArrayField { get; set; }         // dot path within Source to an array (e.g. "body"); omit if Source itself is the array/object to check
     public Dictionary<string, JsonElement>? Find { get; set; } // locate one element of the array by field match
     public string? Field { get; set; }              // field to extract from the located element (or from ArrayField target directly if Find omitted)
-    public string? Op { get; set; }                 // equals | notEquals | isTrue | isFalse | notNull | isNull | greaterThan | greaterOrEqual | lessThan | arrayLengthEquals | allMatch | stringEmpty
+    public string? Op { get; set; }                 // equals | notEquals | isTrue | isFalse | notNull | isNull | greaterThan | greaterOrEqual | lessThan | arrayLengthEquals | allMatch | noneMatch | stringEmpty
     public JsonElement? Expected { get; set; }
 
     // Optional: instead of a literal Expected, compare Target against ANOTHER variable resolved
@@ -66,6 +89,14 @@ public record ExecutionOutcome(bool Passed, string Status, List<string> Log, str
 public class ScriptExecutionService
 {
     private static readonly JsonSerializerOptions JsonOpts = new(JsonSerializerDefaults.Web);
+    // Guardrail (agreed in planning after the DSH-031/046 cleanup-step discussion): a step whose
+    // SQL text looks destructive is refused unless the EnvironmentTarget has explicitly
+    // confirmed AllowDestructiveTestSql -- specifically to stop a misconfigured TestCompanyId
+    // from silently deleting/updating some OTHER real company's saved data.
+    private static readonly Regex DestructiveSqlPattern =
+        new(@"\b(DELETE|UPDATE|INSERT|DROP|TRUNCATE|MERGE|ALTER|EXEC|EXECUTE)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static bool IsDestructiveQuery(string query) => DestructiveSqlPattern.IsMatch(query);
+
     private readonly HttpClient _http;
     private readonly SecretProtector _protector;
 
@@ -74,9 +105,11 @@ public class ScriptExecutionService
         _http = http; _protector = protector;
     }
 
-    public async Task<ExecutionOutcome> ExecuteAsync(AutomationScript script, EnvironmentTarget env, EnvironmentCredential? cred)
+    public async Task<ExecutionOutcome> ExecuteAsync(AutomationScript script, EnvironmentTarget env, EnvironmentCredential? cred, ExecutionMode mode = ExecutionMode.Real)
     {
         var log = new List<string>();
+        if (mode == ExecutionMode.Mock)
+            log.Add("Running in MOCK mode -- no real network/DB calls will be made; every step uses its own MockResponse/MockRows.");
 
         if (string.IsNullOrWhiteSpace(script.ExecutionDefinitionJson))
             return new ExecutionOutcome(false, "Blocked", log,
@@ -103,18 +136,33 @@ public class ScriptExecutionService
 
         var vars = new Dictionary<string, JsonElement>();
 
+        // Once a step fails, remaining NORMAL steps are skipped (fail-fast, same as before) --
+        // but any step marked AlwaysRun (teardown/restore) still runs regardless, and the FIRST
+        // failure encountered (test or teardown) is what gets reported as the outcome.
+        string? firstFailureMessage = null;
+
         foreach (var step in steps)
         {
             var label = step.Label ?? step.Type;
+
+            if (firstFailureMessage is not null && !step.AlwaysRun)
+            {
+                log.Add($"SKIP [{label}] (a prior step failed; not marked AlwaysRun)");
+                continue;
+            }
+
             try
             {
                 switch (step.Type)
                 {
                     case "http":
-                        await RunHttpStepAsync(step, env, bearerToken, vars, log);
+                        await RunHttpStepAsync(step, env, bearerToken, vars, log, mode);
                         break;
                     case "sql":
-                        await RunSqlStepAsync(step, env, vars, log);
+                        await RunSqlStepAsync(step, env, vars, log, mode);
+                        break;
+                    case "sqlForEach":
+                        await RunSqlForEachStepAsync(step, env, vars, log, mode);
                         break;
                     case "assert":
                         RunAssertStep(step, vars, log);
@@ -126,21 +174,38 @@ public class ScriptExecutionService
             catch (AssertionFailedException afx)
             {
                 log.Add($"FAIL [{label}]: {afx.Message}");
-                return new ExecutionOutcome(false, "Fail", log, afx.Message);
+                firstFailureMessage ??= afx.Message;
             }
             catch (Exception ex)
             {
                 log.Add($"ERROR [{label}]: {ex.Message}");
-                return new ExecutionOutcome(false, "Fail", log, ex.Message);
+                firstFailureMessage ??= ex.Message;
             }
         }
+
+        if (firstFailureMessage is not null)
+            return new ExecutionOutcome(false, "Fail", log, firstFailureMessage);
 
         log.Add("All steps passed.");
         return new ExecutionOutcome(true, "Pass", log, null);
     }
 
-    private async Task RunHttpStepAsync(ExecStep step, EnvironmentTarget env, string? bearerToken, Dictionary<string, JsonElement> vars, List<string> log)
+    private async Task RunHttpStepAsync(ExecStep step, EnvironmentTarget env, string? bearerToken, Dictionary<string, JsonElement> vars, List<string> log, ExecutionMode mode)
     {
+        if (mode == ExecutionMode.Mock)
+        {
+            if (step.MockResponse is not JsonElement mockBody || mockBody.ValueKind == JsonValueKind.Undefined)
+                throw new InvalidOperationException($"Running in Mock mode but this http step ('{step.Label ?? step.Path ?? "http"}') has no MockResponse defined.");
+            log.Add($"MOCK {step.Method ?? "GET"} {step.Path}");
+            if (!string.IsNullOrEmpty(step.SaveAs))
+            {
+                var wrapper = new Dictionary<string, object?> { ["status"] = 200, ["body"] = JsonSerializer.Deserialize<object?>(mockBody.GetRawText()), ["text"] = mockBody.GetRawText() };
+                vars[step.SaveAs] = JsonSerializer.SerializeToElement(wrapper, JsonOpts);
+            }
+            log.Add("  -> 200 (mock)");
+            return;
+        }
+
         if (string.IsNullOrWhiteSpace(env.DashboardBaseUrl))
             throw new InvalidOperationException("EnvironmentTarget has no DashboardBaseUrl configured.");
         var baseUrl = env.DashboardBaseUrl.TrimEnd('/');
@@ -191,9 +256,24 @@ public class ScriptExecutionService
         log.Add($"  -> {statusCode}");
     }
 
-    private async Task RunSqlStepAsync(ExecStep step, EnvironmentTarget env, Dictionary<string, JsonElement> vars, List<string> log)
+    private async Task RunSqlStepAsync(ExecStep step, EnvironmentTarget env, Dictionary<string, JsonElement> vars, List<string> log, ExecutionMode mode)
     {
         if (string.IsNullOrWhiteSpace(step.Query)) throw new InvalidOperationException("SQL step has no Query.");
+
+        if (mode == ExecutionMode.Mock)
+        {
+            if (step.MockRows is not JsonElement mockRows || mockRows.ValueKind != JsonValueKind.Array)
+                throw new InvalidOperationException($"Running in Mock mode but this sql step ('{step.Label ?? "sql"}') has no MockRows array defined.");
+            log.Add($"MOCK SQL ({step.Database ?? "Master"}): {Truncate(step.Query)}");
+            if (!string.IsNullOrEmpty(step.SaveAs))
+                vars[step.SaveAs] = mockRows;
+            log.Add($"  -> {mockRows.GetArrayLength()} mock row(s)");
+            return;
+        }
+
+        if (IsDestructiveQuery(step.Query) && !env.AllowDestructiveTestSql)
+            throw new InvalidOperationException($"This step's SQL looks destructive (DELETE/UPDATE/INSERT/DROP/TRUNCATE/MERGE/etc.) but '{env.Name}' has not confirmed \"Allow destructive test SQL\". An Admin must explicitly enable that on the Environment Target first -- this exists specifically so a misconfigured TestCompanyId can never silently touch another real company's data. Query: {Truncate(step.Query)}");
+
         var encryptedConn = (step.Database ?? "Master") switch
         {
             "Transaction" => env.TransactionDbConnectionStringEncrypted,
@@ -230,6 +310,53 @@ public class ScriptExecutionService
         if (!string.IsNullOrEmpty(step.SaveAs))
             vars[step.SaveAs] = JsonSerializer.SerializeToElement(rows, JsonOpts);
         log.Add($"  -> {rows.Count} row(s)");
+    }
+
+    // "sqlForEach" -- iterates a captured rows variable (typically from an earlier "sql" SELECT
+    // step) and runs Query once per row, binding every JSON property of that row as a same-named
+    // @param. This is what makes capture-and-restore generic: capture existing rows into a
+    // variable, mutate/delete them for the test, then (AlwaysRun=true) restore each captured row
+    // via an INSERT built from its own column values -- no test-specific C# code needed.
+    private async Task RunSqlForEachStepAsync(ExecStep step, EnvironmentTarget env, Dictionary<string, JsonElement> vars, List<string> log, ExecutionMode mode)
+    {
+        if (string.IsNullOrWhiteSpace(step.Query)) throw new InvalidOperationException("sqlForEach step has no Query.");
+        var rowsVar = GetVar(vars, step.Source);
+        if (rowsVar.ValueKind != JsonValueKind.Array)
+            throw new InvalidOperationException($"sqlForEach step's Source '{step.Source}' did not resolve to an array.");
+
+        if (mode == ExecutionMode.Mock)
+        {
+            log.Add($"MOCK sqlForEach ({step.Database ?? "Master"}): {Truncate(step.Query)} x {rowsVar.GetArrayLength()} row(s) from '{step.Source}' (no real DB touched)");
+            return;
+        }
+
+        if (IsDestructiveQuery(step.Query) && !env.AllowDestructiveTestSql)
+            throw new InvalidOperationException($"This sqlForEach step's SQL looks destructive but '{env.Name}' has not confirmed \"Allow destructive test SQL\". Query: {Truncate(step.Query)}");
+
+        var encryptedConn = (step.Database ?? "Master") switch
+        {
+            "Transaction" => env.TransactionDbConnectionStringEncrypted,
+            "Report" => env.ReportDbConnectionStringEncrypted,
+            _ => env.MasterDbConnectionStringEncrypted,
+        };
+        if (string.IsNullOrWhiteSpace(encryptedConn))
+            throw new InvalidOperationException($"EnvironmentTarget has no {(step.Database ?? "Master")} DB connection string configured.");
+        var connStr = _protector.Unprotect(encryptedConn);
+
+        log.Add($"SQL forEach ({step.Database ?? "Master"}): {Truncate(step.Query)} x {rowsVar.GetArrayLength()} row(s) from '{step.Source}'");
+        using var conn = new SqlConnection(connStr);
+        await conn.OpenAsync();
+        int count = 0;
+        foreach (var row in rowsVar.EnumerateArray())
+        {
+            using var cmd = new SqlCommand(step.Query, conn);
+            if (row.ValueKind == JsonValueKind.Object)
+                foreach (var prop in row.EnumerateObject())
+                    cmd.Parameters.AddWithValue("@" + prop.Name, JsonElementToClr(prop.Value) ?? DBNull.Value);
+            await cmd.ExecuteNonQueryAsync();
+            count++;
+        }
+        log.Add($"  -> executed for {count} row(s)");
     }
 
     private void RunAssertStep(ExecStep step, Dictionary<string, JsonElement> vars, List<string> log)

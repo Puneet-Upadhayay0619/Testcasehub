@@ -726,6 +726,15 @@ public class JsonFileDataStore : IDataStore
             return script;
         });
 
+    public Task<AutomationScript> SetTestTierAsync(int id, string testTier) =>
+        WithLockAsync(async () =>
+        {
+            var script = _data.AutomationScripts.First(s => s.Id == id);
+            script.TestTier = testTier;
+            await PersistAsync();
+            return script;
+        });
+
     public Task<CompanyAiSettings?> GetCompanyAiSettingsAsync(int companyId) =>
         WithLockAsync(async () => _data.CompanyAiSettings.FirstOrDefault(a => a.CompanyId == companyId));
 
