@@ -137,6 +137,20 @@ function scriptMatchesPlatform(layer, platform){
   if(platform === 'Both') return l === 'App' || l === 'App-API';
   return l === platform;
 }
+// Dynamic suites carry an explicit Layer criterion in their saved filter (FilterJson) -- when
+// set, filter the suite the same way scripts are filtered. Static suites (a hand-picked bag of
+// test case IDs) have no single Layer of their own, so they're left unfiltered rather than
+// risking hiding one the user actually wants -- same for a dynamic suite with Layer left "Any".
+function suiteMatchesPlatform(suite, platform){
+  if(suite.kind !== 'Dynamic') return true;
+  let layer = '';
+  // NOTE: FilterJson is serialized server-side via a raw JsonSerializer.Serialize call (not
+  // through MVC's camelCase-configured options), so the stored keys are PascalCase (e.g.
+  // "Layer"), unlike every other API response this app parses. Check both cases defensively.
+  try{ const f = JSON.parse(suite.filterJson || '{}'); layer = f.Layer || f.layer || ''; } catch(e){ layer = ''; }
+  if(!layer) return true;
+  return scriptMatchesPlatform(layer, platform);
+}
 function setAutomationPlatform(v){
   state.automationPlatform = v;
   render();
@@ -1786,6 +1800,7 @@ function renderSuites(){
     <div class="panel">
       <h3>Test Suites</h3>
       <p class="sub" style="margin-top:-6px;">Named groups of test cases — Static (hand-picked IDs) or Dynamic (a saved filter, re-evaluated every time).</p>
+      <p class="sub" style="margin:0 0 8px;">Platform: <strong>${escapeHtml(state.automationPlatform)}</strong> (change from the Automation menu in the sidebar). Dynamic suites with a Task area set are filtered to match; static suites and "Any"-area dynamic suites always show, since they aren't tied to one platform.</p>
       ${canEditContent() ? `
       <div class="actions-row">
         <button type="button" class="secondary small" id="toggleCreateStaticSuite">${state.showCreateStaticSuite ? 'Cancel' : '+ Static suite'}</button>
@@ -1812,7 +1827,7 @@ function renderSuites(){
       ` : ''}
       <table style="margin-top:14px;">
         <thead><tr><th>Suite</th><th>Kind</th><th>Created by</th><th></th></tr></thead>
-        <tbody>${rows || '<tr><td colspan="4" class="empty">No suites yet.</td></tr>'}</tbody>
+        <tbody>${rows || `<tr><td colspan="4" class="empty">No ${escapeHtml(state.automationPlatform)} suites yet.</td></tr>`}</tbody>
       </table>
       <div class="actions-row"><button type="button" class="ghost" id="closeSuites">Close</button></div>
     </div>
@@ -2298,8 +2313,7 @@ function renderEnvironments(){
     <div class="panel">
       <h3>Environment Targets</h3>
       <p class="sub" style="margin-top:-6px;">Staging/Production configs — connection strings are encrypted at rest and never shown again after saving.</p>
-      <p class="sub" style="margin:0 0 4px;">Platform:</p>
-      ${renderPlatformSelector()}
+      <p class="sub" style="margin:0 0 8px;">Platform: <strong>${escapeHtml(state.automationPlatform)}</strong> (change from the Automation menu in the sidebar).</p>
       ${canEditContent() ? `<div class="actions-row"><button type="button" class="secondary small" id="toggleCreateEnvironment">${state.showCreateEnvironment?'Cancel':'+ Add environment'}</button></div>` : ''}
       ${state.showCreateEnvironment ? `
         <div class="grid2">
@@ -2768,8 +2782,7 @@ function renderAutomationScripts(){
     <div class="panel">
       <h3>Automation Scripts</h3>
       <p class="sub" style="margin-top:-6px;">Two ways a script lands here: (1) a Claude session connected to this MCP + your repo's MCP calls save_automation_script, or (2) the "Generate with Claude" button below calls Claude directly using the company's own Anthropic key (AI Settings). Either way it's stored company/module/test-case scoped, never pushed to the company's own repo.</p>
-      <p class="sub" style="margin:0 0 4px;">Platform:</p>
-      ${renderPlatformSelector()}
+      <p class="sub" style="margin:0 0 8px;">Platform: <strong>${escapeHtml(state.automationPlatform)}</strong> (change from the Automation menu in the sidebar).</p>
       <div class="grid2" style="max-width:520px;">
         <div class="field"><label>Module</label>
           <select id="automationScriptsModuleSelect">
@@ -3139,6 +3152,12 @@ function renderSidebar(){
         <span class="item-icon">🤖</span><span class="item-text">Automation ${state.automationMenuOpen ? '▾' : '▸'}</span>
       </div>
       ${state.automationMenuOpen ? `
+      <div class="sub-item" style="padding:6px 10px 4px;">
+        <div class="muted" style="font-size:11px;margin-bottom:4px;">PLATFORM</div>
+        <div style="display:flex;flex-wrap:wrap;gap:4px;">
+          ${PLATFORMS.map(p => `<button type="button" class="small ${state.automationPlatform===p.v?'':'ghost'}" data-set-platform="${p.v}" style="padding:2px 8px;">${escapeHtml(p.label)}</button>`).join('')}
+        </div>
+      </div>
       <div class="sidebar-item menu-item sub-item" id="menuSuites" title="Test Suites"><span class="item-icon">🗂️</span><span class="item-text">Test Suites</span></div>
       <div class="sidebar-item menu-item sub-item" id="menuTestRuns" title="Test Runs"><span class="item-icon">▶️</span><span class="item-text">Test Runs</span></div>
       <div class="sidebar-item menu-item sub-item" id="menuReports" title="Reports"><span class="item-icon">📊</span><span class="item-text">Reports</span></div>
