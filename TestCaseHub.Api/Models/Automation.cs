@@ -22,6 +22,31 @@ public class ApiKey
     public string CreatedBy { get; set; } = "";
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? LastUsedAt { get; set; }
+
+    // Optional, non-enforced label -- which platform's CI this key is meant for (e.g. a
+    // dedicated key for the mobile GitHub Actions pipeline). Purely organizational/audit; a key
+    // still authenticates for ANY company results regardless of this value. Blank = unscoped
+    // (matches every platform filter), same convention as ModuleRepoLink's optional fields.
+    [MaxLength(16)]
+    public string TestingPlatform { get; set; } = "";
+}
+
+// The Dashboard/App-API/App taxonomy used across Test Case Hub, under a name that collides
+// with neither TestRunResult.Platform (browser/device dimension, e.g. "Chrome 126") nor
+// ModuleRepoLink.Layer (RepoLayer -- Frontend/Backend/Database, a repo-STRUCTURE concept).
+// AutomationScript keeps its existing "Layer" field name (shipped first, no collision there) --
+// same taxonomy, different name, for this historical reason. "Both" is valid only for entities
+// that are pure organization/filtering (TestRun, TestSuite, ApiKey) -- never for something tied
+// to one concrete piece of infrastructure (EnvironmentTarget, ModuleRepoLink), where exactly one
+// real platform must be picked. Core3 is what those infra-bound entities validate against.
+public static class TestingPlatform
+{
+    public const string Dashboard = "Dashboard";
+    public const string AppApi = "App-API";
+    public const string App = "App";
+    public const string Both = "Both";
+    public static readonly string[] Core3 = { Dashboard, AppApi, App };
+    public static readonly string[] All = { Dashboard, AppApi, App, Both };
 }
 
 public static class EnvironmentType
@@ -52,6 +77,14 @@ public class EnvironmentTarget
     [MaxLength(512)] public string DashboardBaseUrl { get; set; } = "";
     [MaxLength(512)] public string AppApiBaseUrl { get; set; } = "";
     [MaxLength(512)] public string AppBaseUrl { get; set; } = "";
+
+    // Which ONE platform this environment record is for (see TestingPlatform.Core3 -- no
+    // "Both" here, an environment is one concrete piece of infrastructure). Existing rows
+    // migrate to Dashboard (everything real configured so far has been Dashboard). Native
+    // execution's Execute endpoint rejects a script whose own Layer doesn't match this, so a
+    // Dashboard script can no longer be accidentally pointed at an App-API-tagged environment.
+    [MaxLength(16)]
+    public string TestingPlatform { get; set; } = Models.TestingPlatform.Dashboard;
 
     public string MasterDbConnectionStringEncrypted { get; set; } = "";
     public string TransactionDbConnectionStringEncrypted { get; set; } = "";

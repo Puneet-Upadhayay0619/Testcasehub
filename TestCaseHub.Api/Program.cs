@@ -420,6 +420,11 @@ if (storageMode == "SqlServer")
             @"ALTER TABLE ""EnvironmentTargets"" ADD COLUMN IF NOT EXISTS ""AllowDestructiveTestSql"" boolean NOT NULL DEFAULT false;",
             @"ALTER TABLE ""AutomationScripts"" ADD COLUMN IF NOT EXISTS ""TestTier"" varchar(16) NOT NULL DEFAULT 'Regression';",
             @"ALTER TABLE ""AutomationScripts"" ADD COLUMN IF NOT EXISTS ""Layer"" varchar(16) NOT NULL DEFAULT '';",
+            @"ALTER TABLE ""EnvironmentTargets"" ADD COLUMN IF NOT EXISTS ""TestingPlatform"" varchar(16) NOT NULL DEFAULT 'Dashboard';",
+            @"ALTER TABLE ""TestRuns"" ADD COLUMN IF NOT EXISTS ""TestingPlatform"" varchar(16) NOT NULL DEFAULT 'Dashboard';",
+            @"ALTER TABLE ""TestSuites"" ADD COLUMN IF NOT EXISTS ""TestingPlatform"" varchar(16) NOT NULL DEFAULT 'Dashboard';",
+            @"ALTER TABLE ""ApiKeys"" ADD COLUMN IF NOT EXISTS ""TestingPlatform"" varchar(16) NOT NULL DEFAULT '';",
+            @"ALTER TABLE ""ModuleRepoLinks"" ADD COLUMN IF NOT EXISTS ""TestingPlatform"" varchar(16) NOT NULL DEFAULT 'Dashboard';",
 
             // Data Protection key ring storage (see PostgresXmlRepository.cs) -- must exist
             // before AddDataProtection() tries to read/write keys through it.

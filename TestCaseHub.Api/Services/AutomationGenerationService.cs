@@ -39,7 +39,12 @@ public class AutomationGenerationService
         if (tc.ModuleId != moduleId) return new GenerationOutcome(false, "That test case does not belong to the specified module.", null, warnings);
 
         var links = await _store.GetModuleRepoLinksAsync(moduleId);
-        var files = new List<RepoFile>();
+        // Grouped per link (not one flat file list) so BuildPrompt can label each group by
+        // platform+host -- a module can legitimately have an Azure DevOps App-API link AND a
+        // GitHub App link side by side (see ModuleRepoLink.TestingPlatform); without a clear
+        // label, a combined-platform generation could mix backend and mobile source with no cue
+        // as to which is which.
+        var fileGroups = new List<(ModuleRepoLink Link, List<RepoFile> Files)>();
         if (links.Count == 0)
         {
             warnings.Add("No repo linked to this module -- generating from the descriptive test case alone, with no real source code as grounding. Consider adding a Repo Link first for a materially better result.");
@@ -50,17 +55,17 @@ public class AutomationGenerationService
             {
                 if (string.IsNullOrEmpty(link.AccessTokenEncrypted))
                 {
-                    warnings.Add($"Repo link for layer '{link.Layer}' has no access token saved -- skipped.");
+                    warnings.Add($"Repo link for layer '{link.Layer}' ({link.TestingPlatform}) has no access token saved -- skipped.");
                     continue;
                 }
                 var token = _protector.Unprotect(link.AccessTokenEncrypted);
                 var fetched = await _repoContent.FetchFilesAsync(link, token);
-                files.AddRange(fetched);
+                fileGroups.Add((link, fetched));
             }
         }
 
         var apiKey = _protector.Unprotect(settings.ApiKeyEncrypted);
-        var prompt = BuildPrompt(tc, files, framework);
+        var prompt = BuildPrompt(tc, fileGroups, framework);
         var result = await _anthropic.GenerateAsync(apiKey, settings.Model, prompt);
         if (!result.Success)
             return new GenerationOutcome(false, $"Anthropic call failed: {result.Error}", null, warnings);
@@ -118,7 +123,7 @@ public class AutomationGenerationService
         return results;
     }
 
-    private static string BuildPrompt(TestCase tc, List<RepoFile> files, string? framework)
+    private static string BuildPrompt(TestCase tc, List<(ModuleRepoLink Link, List<RepoFile> Files)> fileGroups, string? framework)
     {
         var fw = string.IsNullOrWhiteSpace(framework) ? "Playwright with TypeScript" : framework;
         var sb = new StringBuilder();
@@ -135,14 +140,21 @@ public class AutomationGenerationService
         if (tc.Tags.Count > 0) sb.AppendLine($"Tags: {string.Join(", ", tc.Tags)}");
         sb.AppendLine();
 
-        if (files.Count > 0)
+        var anyFiles = fileGroups.Any(g => g.Files.Count > 0);
+        if (anyFiles)
         {
-            sb.AppendLine("Real source code from the system under test (use this to ground real endpoint routes, payload shapes, and validation behaviour -- do not invent an API contract that contradicts this code; if the code shows a validation rule the test case doesn't expect, or vice versa, still write the assertion to match the TEST CASE's expectation, and add a one-line comment flagging the discrepancy as a real finding rather than silently matching the code):");
-            foreach (var f in files)
+            sb.AppendLine("Real source code from the system under test (use this to ground real endpoint routes, payload shapes, and validation behaviour -- do not invent an API contract that contradicts this code; if the code shows a validation rule the test case doesn't expect, or vice versa, still write the assertion to match the TEST CASE's expectation, and add a one-line comment flagging the discrepancy as a real finding rather than silently matching the code). Where more than one platform's source is included below, each is clearly labeled -- do not mix routes/contracts from one platform's code into an assertion about a different platform:");
+            foreach (var (link, files) in fileGroups)
             {
-                sb.AppendLine($"--- {f.Path} ---");
-                sb.AppendLine(f.Content);
+                if (files.Count == 0) continue;
                 sb.AppendLine();
+                sb.AppendLine($"===== Platform: {link.TestingPlatform} | Repo: {link.RepoHost} {link.OrgOrAccount}/{link.RepoName} | Layer: {link.Layer} =====");
+                foreach (var f in files)
+                {
+                    sb.AppendLine($"--- {f.Path} ---");
+                    sb.AppendLine(f.Content);
+                    sb.AppendLine();
+                }
             }
         }
         else

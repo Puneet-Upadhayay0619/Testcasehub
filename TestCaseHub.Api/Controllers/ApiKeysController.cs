@@ -39,8 +39,12 @@ public class ApiKeysController : ControllerBase
         if (companyId is null) return User.IsSuperAdmin() ? BadRequest("SuperAdmin must specify ?companyId=.") : Forbid();
         if (string.IsNullOrWhiteSpace(req.Name)) return BadRequest("A name is required (e.g. 'Azure DevOps CI').");
 
+        if (!string.IsNullOrWhiteSpace(req.TestingPlatform) && !Models.TestingPlatform.All.Contains(req.TestingPlatform))
+            return BadRequest("TestingPlatform, if given, must be Dashboard, App-API, App, or Both.");
+
         var (raw, key) = await _keys.IssueAsync(req.Name.Trim(), req.Scope ?? "ReportResults", ActorDisplayName);
         key.CompanyId = companyId.Value;
+        key.TestingPlatform = req.TestingPlatform ?? "";
         key = await _store.UpdateApiKeyAsync(key);
         await _store.AddAuditLogAsync(new AuditLog
         {

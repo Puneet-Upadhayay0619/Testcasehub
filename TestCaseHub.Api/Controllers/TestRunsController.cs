@@ -56,12 +56,15 @@ public class TestRunsController : ControllerBase
             if (cred is null || cred.EnvironmentTargetId != req.EnvironmentTargetId)
                 return BadRequest("EnvironmentCredentialId must belong to the selected EnvironmentTargetId.");
         }
+        var testingPlatform = string.IsNullOrWhiteSpace(req.TestingPlatform) ? Models.TestingPlatform.Dashboard : req.TestingPlatform;
+        if (!Models.TestingPlatform.All.Contains(testingPlatform)) return BadRequest("TestingPlatform must be Dashboard, App-API, App, or Both.");
+
         var run = new TestRun
         {
             CompanyId = companyId.Value,
             ReleaseId = req.ReleaseId, SuiteId = req.SuiteId, Name = req.Name.Trim(),
             TargetEnvironment = req.TargetEnvironment ?? "", EnvironmentTargetId = req.EnvironmentTargetId,
-            EnvironmentCredentialId = req.EnvironmentCredentialId, CreatedBy = ActorDisplayName
+            EnvironmentCredentialId = req.EnvironmentCredentialId, TestingPlatform = testingPlatform, CreatedBy = ActorDisplayName
         };
         run = await _store.CreateTestRunAsync(run);
         return TestRunResponse.From(run);

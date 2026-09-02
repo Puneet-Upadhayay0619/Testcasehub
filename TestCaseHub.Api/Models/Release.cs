@@ -65,6 +65,15 @@ public class TestRun
     [MaxLength(256)]
     public string CreatedBy { get; set; } = "";
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+
+    // Which platform(s) this run is for (TestingPlatform.All -- Dashboard/App-API/App/Both are
+    // all valid, unlike EnvironmentTarget/ModuleRepoLink). Defaults from whatever platform was
+    // selected in the UI at creation time. Deliberately NOT enforced against what actually gets
+    // recorded into it -- this is an organizational/filtering tag, not a hard constraint, so a
+    // run started as "Dashboard" can still take an occasional adjacent result without being
+    // rejected. Existing rows migrate to Dashboard.
+    [MaxLength(16)]
+    public string TestingPlatform { get; set; } = Models.TestingPlatform.Dashboard;
 }
 
 // One recorded outcome for one test case within a Test Run. Deliberately APPEND-ONLY — a retry

@@ -36,7 +36,9 @@ public class SuitesController : ControllerBase
         companyId = User.ResolveActingCompanyId(companyId);
         if (companyId is null) return User.IsSuperAdmin() ? BadRequest("SuperAdmin must specify ?companyId=.") : Forbid();
         if (string.IsNullOrWhiteSpace(req.Name)) return BadRequest("Suite name is required.");
-        var suite = new TestSuite { CompanyId = companyId.Value, Name = req.Name.Trim(), Description = req.Description ?? "", Kind = "Static", CreatedBy = CurrentUserDisplayName };
+        if (string.IsNullOrWhiteSpace(req.TestingPlatform) || !Models.TestingPlatform.All.Contains(req.TestingPlatform))
+            return BadRequest("TestingPlatform is required and must be Dashboard, App-API, App, or Both.");
+        var suite = new TestSuite { CompanyId = companyId.Value, Name = req.Name.Trim(), Description = req.Description ?? "", Kind = "Static", TestingPlatform = req.TestingPlatform, CreatedBy = CurrentUserDisplayName };
         suite.TestCaseIds = req.TestCaseIds ?? new();
         suite = await _store.CreateSuiteAsync(suite);
         return SuiteResponse.From(suite);
@@ -54,11 +56,13 @@ public class SuitesController : ControllerBase
         companyId = User.ResolveActingCompanyId(companyId);
         if (companyId is null) return User.IsSuperAdmin() ? BadRequest("SuperAdmin must specify ?companyId=.") : Forbid();
         if (string.IsNullOrWhiteSpace(req.Name)) return BadRequest("Suite name is required.");
+        if (string.IsNullOrWhiteSpace(req.TestingPlatform) || !Models.TestingPlatform.All.Contains(req.TestingPlatform))
+            return BadRequest("TestingPlatform is required and must be Dashboard, App-API, App, or Both.");
         var filter = new DynamicFilter(req.ModuleId, req.Layer, req.VerificationType, req.Status, req.Priority, req.Tag, req.Search);
         var suite = new TestSuite
         {
             CompanyId = companyId.Value, Name = req.Name.Trim(), Description = req.Description ?? "", Kind = "Dynamic",
-            FilterJson = System.Text.Json.JsonSerializer.Serialize(filter), CreatedBy = CurrentUserDisplayName
+            FilterJson = System.Text.Json.JsonSerializer.Serialize(filter), TestingPlatform = req.TestingPlatform, CreatedBy = CurrentUserDisplayName
         };
         suite = await _store.CreateSuiteAsync(suite);
         return SuiteResponse.From(suite);

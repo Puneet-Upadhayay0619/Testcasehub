@@ -126,6 +126,15 @@ public class ScriptExecutionService
             return new ExecutionOutcome(false, "Blocked", log,
                 "Native Run isn't available for App (mobile) scripts -- results are recorded via an external CI pipeline (GitHub Actions/device farm) posting to this Test Run instead, not by Test Case Hub's own runner.");
 
+        // Safety check added alongside EnvironmentTarget.TestingPlatform (each environment now
+        // declares which ONE platform it's for): reject up front if a script's own Layer doesn't
+        // match, rather than silently hitting whatever URL happens to be filled in. A blank
+        // script Layer is treated as Dashboard, matching every other default in this file.
+        var scriptLayer = string.IsNullOrEmpty(script.Layer) ? "Dashboard" : script.Layer;
+        if (mode != ExecutionMode.Mock && env.TestingPlatform != scriptLayer)
+            return new ExecutionOutcome(false, "Blocked", log,
+                $"This script is tagged '{scriptLayer}' but EnvironmentTarget '{env.Name}' is tagged '{env.TestingPlatform}' -- pick an environment that matches the script's platform, or re-tag one of the two if this pairing is actually intentional.");
+
         List<ExecStep>? steps;
         try { steps = JsonSerializer.Deserialize<List<ExecStep>>(script.ExecutionDefinitionJson, JsonOpts); }
         catch (Exception ex)

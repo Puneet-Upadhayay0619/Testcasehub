@@ -55,6 +55,16 @@ public class ModuleRepoLink
     [MaxLength(256)]
     public string BasePath { get; set; } = "";
 
+    // Which platform this repo belongs to (TestingPlatform.Core3 -- Dashboard/App-API/App,
+    // no "Both": a single repo link is one concrete codebase). Independent of Layer above --
+    // Layer is repo STRUCTURE (frontend/backend/db within that codebase), this is which
+    // product/platform the codebase itself is for. E.g. App-API's backend lives in Azure
+    // DevOps, App's mobile codebase lives in GitHub entirely separately -- this is what lets
+    // both coexist on the same module without the RepoHost split causing any conflict. Existing
+    // rows migrate to Dashboard (everything real configured so far).
+    [MaxLength(16)]
+    public string TestingPlatform { get; set; } = Models.TestingPlatform.Dashboard;
+
     // Read-only PAT, encrypted at rest via SecretProtector -- never returned in full by any GET.
     public string AccessTokenEncrypted { get; set; } = "";
 

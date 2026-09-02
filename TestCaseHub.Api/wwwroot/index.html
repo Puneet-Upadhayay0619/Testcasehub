@@ -132,24 +132,30 @@ const PLATFORMS = [
   {v:'App', label:'App'},
   {v:'Both', label:'App + App API'}
 ];
+// The 3 "real infrastructure" platforms -- no Both -- used for EnvironmentTarget/ModuleRepoLink,
+// which are each one concrete piece of infrastructure, unlike TestRun/TestSuite/ApiKey which are
+// pure organization and can legitimately span App+App-API (Both).
+const TestingPlatform_Core3 = ['Dashboard', 'App-API', 'App'];
 function scriptMatchesPlatform(layer, platform){
-  const l = layer || 'Dashboard'; // legacy/unset scripts default to Dashboard, same as the backend
-  if(platform === 'Both') return l === 'App' || l === 'App-API';
-  return l === platform;
+  // Generic platform-tag matcher used for everything with a TestingPlatform/Layer tag:
+  // AutomationScript/EnvironmentTarget/ModuleRepoLink only ever carry Dashboard/App-API/App
+  // (never "Both" on themselves), while TestSuite/TestRun/ApiKey CAN legitimately be tagged
+  // "Both" -- so this handles an entity tag of "Both" as well as a filter of "Both".
+  const l = layer || 'Dashboard'; // legacy/unset defaults to Dashboard, same as the backend
+  if(platform === 'Both') return l === 'App' || l === 'App-API' || l === 'Both';
+  if(platform === 'App' || platform === 'App-API') return l === platform || l === 'Both';
+  return l === platform; // Dashboard filter: exact match only, "Both" never counts as Dashboard
 }
 // Dynamic suites carry an explicit Layer criterion in their saved filter (FilterJson) -- when
 // set, filter the suite the same way scripts are filtered. Static suites (a hand-picked bag of
 // test case IDs) have no single Layer of their own, so they're left unfiltered rather than
 // risking hiding one the user actually wants -- same for a dynamic suite with Layer left "Any".
 function suiteMatchesPlatform(suite, platform){
-  if(suite.kind !== 'Dynamic') return true;
-  let layer = '';
-  // NOTE: FilterJson is serialized server-side via a raw JsonSerializer.Serialize call (not
-  // through MVC's camelCase-configured options), so the stored keys are PascalCase (e.g.
-  // "Layer"), unlike every other API response this app parses. Check both cases defensively.
-  try{ const f = JSON.parse(suite.filterJson || '{}'); layer = f.Layer || f.layer || ''; } catch(e){ layer = ''; }
-  if(!layer) return true;
-  return scriptMatchesPlatform(layer, platform);
+  // Suites now carry their own mandatory TestingPlatform tag (set explicitly at creation, same
+  // taxonomy as PLATFORMS/scriptMatchesPlatform) -- a real persisted field, not inferred from
+  // the optional Layer criterion inside a dynamic suite's FilterJson (which is a separate,
+  // independent thing: which test cases match, not which platform the suite itself belongs to).
+  return scriptMatchesPlatform(suite.testingPlatform, platform);
 }
 function setAutomationPlatform(v){
   state.automationPlatform = v;
@@ -582,6 +588,8 @@ let state = {
   showAutomationScripts: false,
   automationScriptsLoading: false,
   automationPlatform: 'Dashboard', // Dashboard | App-API | App | Both -- filters Scripts list + adapts Environment Target form fields + Run UI, see PLATFORMS below
+  envFormPlatform: 'Dashboard', // which platform the OPEN create-environment form is currently filling in for
+  editEnvPlatformChoice: 'Dashboard', // same, for whichever environment row is currently in edit mode
   automationScriptsModuleId: '',
   automationScriptsTestCaseId: '',
   viewingScriptId: null,
@@ -1754,19 +1762,19 @@ async function loadSuites(){
   try{ DATA.suites = await apiFetch('/api/suites'); } catch(err){ showToast('Could not load suites: ' + err.message, 'error'); }
   state.suitesLoading = false; render();
 }
-async function createStaticSuite(name, description, idsCsv){
+async function createStaticSuite(name, description, idsCsv, testingPlatform){
   const testCaseIds = idsCsv.split(',').map(s=>s.trim()).filter(Boolean);
   try{
-    const created = await apiFetch('/api/suites/static', { method:'POST', body: JSON.stringify({ name, description, testCaseIds }) });
+    const created = await apiFetch('/api/suites/static', { method:'POST', body: JSON.stringify({ name, description, testCaseIds, testingPlatform }) });
     DATA.suites = [created].concat(DATA.suites || []);
     state.showCreateStaticSuite = false;
     render();
     showToast('Suite "' + created.name + '" created.', 'success');
   } catch(err){ showToast('Could not create suite: ' + err.message, 'error'); }
 }
-async function createDynamicSuite(name, description, filter){
+async function createDynamicSuite(name, description, filter, testingPlatform){
   try{
-    const created = await apiFetch('/api/suites/dynamic', { method:'POST', body: JSON.stringify(Object.assign({ name, description }, filter)) });
+    const created = await apiFetch('/api/suites/dynamic', { method:'POST', body: JSON.stringify(Object.assign({ name, description, testingPlatform }, filter)) });
     DATA.suites = [created].concat(DATA.suites || []);
     state.showCreateDynamicSuite = false;
     render();
@@ -1782,14 +1790,16 @@ async function toggleResolveSuite(id){
 }
 function renderSuites(){
   if(state.suitesLoading) return `<div class="panel"><h3>Test Suites</h3><p class="sub" style="margin-top:-6px;">Loading…</p></div>`;
-  const rows = (DATA.suites || []).map(s => `
+  const platformSuites = (DATA.suites || []).filter(s => suiteMatchesPlatform(s, state.automationPlatform));
+  const rows = platformSuites.map(s => `
     <tr>
       <td>${escapeHtml(s.name)}<br><small class="muted">${escapeHtml(s.description||'')}</small></td>
       <td>${escapeHtml(s.kind)}</td>
+      <td><span class="badge">${escapeHtml(s.testingPlatform||'Dashboard')}</span></td>
       <td>${escapeHtml(s.createdBy)}</td>
       <td><button type="button" class="small ghost" data-resolve-suite="${s.id}">${state.suiteResolveCache[s.id] ? 'Hide' : 'View cases'}</button></td>
     </tr>
-    ${state.suiteResolveCache[s.id] ? `<tr><td colspan="4"><div class="muted" style="font-size:12px;">${
+    ${state.suiteResolveCache[s.id] ? `<tr><td colspan="5"><div class="muted" style="font-size:12px;">${
       state.suiteResolveCache[s.id].length
         ? state.suiteResolveCache[s.id].map(tc => escapeHtml(tc.id) + ' — ' + escapeHtml(tc.title)).join('<br>')
         : 'No test cases match this suite right now.'
@@ -1800,7 +1810,7 @@ function renderSuites(){
     <div class="panel">
       <h3>Test Suites</h3>
       <p class="sub" style="margin-top:-6px;">Named groups of test cases — Static (hand-picked IDs) or Dynamic (a saved filter, re-evaluated every time).</p>
-      <p class="sub" style="margin:0 0 8px;">Platform: <strong>${escapeHtml(state.automationPlatform)}</strong> (change from the Automation menu in the sidebar). Dynamic suites with a Task area set are filtered to match; static suites and "Any"-area dynamic suites always show, since they aren't tied to one platform.</p>
+      <p class="sub" style="margin:0 0 8px;">Platform: <strong>${escapeHtml(state.automationPlatform)}</strong> (change from the Automation menu in the sidebar). Every suite -- static or dynamic -- is tagged with a platform at creation and filtered against it here.</p>
       ${canEditContent() ? `
       <div class="actions-row">
         <button type="button" class="secondary small" id="toggleCreateStaticSuite">${state.showCreateStaticSuite ? 'Cancel' : '+ Static suite'}</button>
@@ -1810,6 +1820,11 @@ function renderSuites(){
         <div class="field"><label>Name</label><input type="text" id="staticSuiteName"></div>
         <div class="field"><label>Description</label><input type="text" id="staticSuiteDesc"></div>
         <div class="field"><label>Test case IDs (comma-separated)</label><input type="text" id="staticSuiteIds" placeholder="TC-RETAIL-DSH-001, TC-RETAIL-DSH-002"></div>
+        <div class="field"><label>Platform</label>
+          <select id="staticSuitePlatform">
+            ${PLATFORMS.map(p => `<option value="${p.v}" ${state.automationPlatform===p.v?'selected':''}>${escapeHtml(p.label)}</option>`).join('')}
+          </select>
+        </div>
         <div class="actions-row"><button type="button" id="saveStaticSuiteBtn">Create static suite</button></div>
       ` : ''}
       ${state.showCreateDynamicSuite ? `
@@ -1822,12 +1837,17 @@ function renderSuites(){
           <div class="field"><label>Status (optional)</label><select id="dynSuiteStatus"><option value="">Any</option>${getAllStatuses().map(s=>`<option value="${s}">${s}</option>`).join('')}</select></div>
           <div class="field"><label>Priority (optional)</label><select id="dynSuitePriority"><option value="">Any</option>${getAllPriorities().map(p=>`<option value="${p}">${p}</option>`).join('')}</select></div>
           <div class="field"><label>Tag (optional)</label><input type="text" id="dynSuiteTag"></div>
+          <div class="field"><label>Platform</label>
+            <select id="dynSuitePlatform">
+              ${PLATFORMS.map(p => `<option value="${p.v}" ${state.automationPlatform===p.v?'selected':''}>${escapeHtml(p.label)}</option>`).join('')}
+            </select>
+          </div>
         </div>
         <div class="actions-row"><button type="button" id="saveDynamicSuiteBtn">Create dynamic suite</button></div>
       ` : ''}
       <table style="margin-top:14px;">
-        <thead><tr><th>Suite</th><th>Kind</th><th>Created by</th><th></th></tr></thead>
-        <tbody>${rows || `<tr><td colspan="4" class="empty">No ${escapeHtml(state.automationPlatform)} suites yet.</td></tr>`}</tbody>
+        <thead><tr><th>Suite</th><th>Kind</th><th>Platform</th><th>Created by</th><th></th></tr></thead>
+        <tbody>${rows || `<tr><td colspan="5" class="empty">No ${escapeHtml(state.automationPlatform)} suites yet.</td></tr>`}</tbody>
       </table>
       <div class="actions-row"><button type="button" class="ghost" id="closeSuites">Close</button></div>
     </div>
@@ -1982,12 +2002,14 @@ async function createBugFromResult(runId, resultId){
 }
 function renderTestRuns(){
   if(state.testRunsLoading) return `<div class="panel"><h3>Test Runs</h3><p class="sub" style="margin-top:-6px;">Loading…</p></div>`;
-  const rows = (DATA.testRuns || []).map(r => {
+  const platformTestRuns = (DATA.testRuns || []).filter(r => scriptMatchesPlatform(r.testingPlatform, state.automationPlatform));
+  const rows = platformTestRuns.map(r => {
     const results = state.testRunResultsCache[r.id];
     const rollup = state.testRunRollupCache[r.id];
     return `
     <tr>
       <td>${escapeHtml(r.name)}</td>
+      <td><span class="badge">${escapeHtml(r.testingPlatform||'Dashboard')}</span></td>
       <td>${escapeHtml(r.targetEnvironment||'')}</td>
       <td>${escapeHtml(r.createdBy)} · ${fmtDate(r.createdAt)}</td>
       <td>
@@ -1995,7 +2017,7 @@ function renderTestRuns(){
         ${canEditContent() ? `<button type="button" class="small ghost" data-record-result="${r.id}">Record result</button>` : ''}
       </td>
     </tr>
-    ${state.testRunDetailId === r.id ? `<tr><td colspan="4">
+    ${state.testRunDetailId === r.id ? `<tr><td colspan="5">
       ${!rollup ? '<span class="muted">Loading…</span>' : `
         <div style="font-size:12px;margin-bottom:8px;">Pass rate: <strong>${rollup.passRatePercent}%</strong> (${rollup.passed}/${rollup.totalCases} passed, ${rollup.failed} failed, ${rollup.blocked} blocked, ${rollup.skipped} skipped, ${rollup.notRun} not run)</div>
         ${state.recordResultRunId === r.id ? `
@@ -2029,6 +2051,12 @@ function renderTestRuns(){
       ${state.showCreateTestRun ? `
         <div class="grid2">
           <div class="field"><label>Name</label><input type="text" id="runName" placeholder="e.g. Sprint 24 Regression"></div>
+          <div class="field"><label>Platform</label>
+            <select id="runPlatform">
+              ${PLATFORMS.map(p => `<option value="${p.v}" ${state.automationPlatform===p.v?'selected':''}>${escapeHtml(p.label)}</option>`).join('')}
+            </select>
+            <small class="muted">Organizational tag, not enforced -- lets this run show up under the right platform filter.</small>
+          </div>
           <div class="field"><label>Target environment (label)</label><input type="text" id="runTargetEnv" placeholder="e.g. Staging"></div>
           <div class="field"><label>Release (optional)</label><select id="runRelease"><option value="">None</option>${(DATA.releases||[]).map(r=>`<option value="${r.id}">${escapeHtml(r.name)}</option>`).join('')}</select></div>
           <div class="field"><label>Suite (optional)</label><select id="runSuite"><option value="">None</option>${(DATA.suites||[]).map(s=>`<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('')}</select></div>
@@ -2046,8 +2074,8 @@ function renderTestRuns(){
         <div class="actions-row"><button type="button" id="saveTestRunBtn">Create test run</button></div>
       ` : ''}
       <table style="margin-top:14px;">
-        <thead><tr><th>Run</th><th>Environment</th><th>Created</th><th></th></tr></thead>
-        <tbody>${rows || '<tr><td colspan="4" class="empty">No test runs yet.</td></tr>'}</tbody>
+        <thead><tr><th>Run</th><th>Platform</th><th>Environment</th><th>Created</th><th></th></tr></thead>
+        <tbody>${rows || `<tr><td colspan="5" class="empty">No ${escapeHtml(state.automationPlatform)} test runs yet.</td></tr>`}</tbody>
       </table>
       <div class="actions-row"><button type="button" class="ghost" id="closeTestRuns">Close</button></div>
     </div>
@@ -2094,9 +2122,9 @@ async function loadApiKeys(){
   try{ DATA.apiKeys = await apiFetch('/api/apikeys'); } catch(err){ showToast('Could not load API keys: ' + err.message, 'error'); }
   state.apiKeysLoading = false; render();
 }
-async function createApiKey(name, scope){
+async function createApiKey(name, scope, testingPlatform){
   try{
-    const issued = await apiFetch('/api/apikeys', { method:'POST', body: JSON.stringify({ name, scope: scope || 'ReportResults' }) });
+    const issued = await apiFetch('/api/apikeys', { method:'POST', body: JSON.stringify({ name, scope: scope || 'ReportResults', testingPlatform: testingPlatform || null }) });
     await loadApiKeys();
     window.prompt('Copy this API key now (shown only once):', issued.rawKey);
     showToast('API key "' + issued.name + '" created.', 'success');
@@ -2112,10 +2140,15 @@ async function revokeApiKey(id){
 }
 function renderApiKeys(){
   if(state.apiKeysLoading) return `<div class="panel"><h3>API Keys</h3><p class="sub" style="margin-top:-6px;">Loading…</p></div>`;
-  const rows = (DATA.apiKeys||[]).map(k => `
+  // Unscoped (no testingPlatform set) keys always show -- this is an optional label, not a
+  // filter that should ever hide a key you forgot to tag. Only a key EXPLICITLY tagged for a
+  // different platform is hidden.
+  const platformApiKeys = (DATA.apiKeys||[]).filter(k => !k.testingPlatform || scriptMatchesPlatform(k.testingPlatform, state.automationPlatform));
+  const rows = platformApiKeys.map(k => `
     <tr>
       <td>${escapeHtml(k.name)}</td>
       <td>${escapeHtml(k.scope)}</td>
+      <td>${k.testingPlatform ? `<span class="badge">${escapeHtml(k.testingPlatform)}</span>` : '<span class="muted">Any</span>'}</td>
       <td>${k.revoked ? '<span class="badge b-deprecated">Revoked</span>' : '<span class="badge b-active">Active</span>'}</td>
       <td>${escapeHtml(k.createdBy)}</td>
       <td>${k.revoked ? '' : `<button type="button" class="small ghost" data-revoke-apikey="${k.id}">Revoke</button>`}</td>
@@ -2128,11 +2161,18 @@ function renderApiKeys(){
       <div class="grid2">
         <div class="field"><label>Name</label><input type="text" id="apiKeyName" placeholder="e.g. Azure DevOps CI"></div>
         <div class="field"><label>Scope</label><input type="text" id="apiKeyScope" placeholder="ReportResults" value="ReportResults"></div>
+        <div class="field"><label>Platform (optional label)</label>
+          <select id="apiKeyPlatform">
+            <option value="">Any (unscoped)</option>
+            ${PLATFORMS.map(p => `<option value="${p.v}">${escapeHtml(p.label)}</option>`).join('')}
+          </select>
+          <small class="muted">Purely organizational/audit -- e.g. a dedicated key for the mobile CI pipeline. Does not restrict what the key can actually post.</small>
+        </div>
       </div>
       <div class="actions-row"><button type="button" id="createApiKeyBtn">Generate key</button></div>
       <table style="margin-top:14px;">
-        <thead><tr><th>Name</th><th>Scope</th><th>Status</th><th>Created by</th><th></th></tr></thead>
-        <tbody>${rows || '<tr><td colspan="5" class="empty">No API keys yet.</td></tr>'}</tbody>
+        <thead><tr><th>Name</th><th>Scope</th><th>Platform</th><th>Status</th><th>Created by</th><th></th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="6" class="empty">No API keys for this platform.</td></tr>'}</tbody>
       </table>
       <div class="actions-row"><button type="button" class="ghost" id="closeApiKeys">Close</button></div>
     </div>
@@ -2217,7 +2257,8 @@ async function deleteEnvironmentCredential(envId, id){
 
 function renderEnvironments(){
   if(state.environmentsLoading) return `<div class="panel"><h3>Environment Targets</h3><p class="sub" style="margin-top:-6px;">Loading…</p></div>`;
-  const rows = (DATA.environments||[]).map(e => {
+  const platformEnvironments = (DATA.environments||[]).filter(e => scriptMatchesPlatform(e.testingPlatform, state.automationPlatform));
+  const rows = platformEnvironments.map(e => {
     const expanded = state.expandedEnvId === e.id;
     const creds = DATA.environmentCredentials[e.id] || [];
     const credRows = creds.map(c => `
@@ -2230,13 +2271,13 @@ function renderEnvironments(){
       </tr>
     `).join('');
     const credsBlock = !expanded ? '' : `
-      <tr><td colspan="5" style="background:var(--bg-soft);padding:12px;">
+      <tr><td colspan="6" style="background:var(--bg-soft);padding:12px;">
         <strong style="font-size:13px;">Named execution credentials</strong>
         <p class="sub" style="margin:2px 0 8px;">Agreed in planning: a Lead triggering a run picks one of these by Label -- the password is encrypted at rest and never shown again after saving. <strong>For native script execution (the "Run" button on Automation Scripts): paste a Bearer token here, NOT your account's login password</strong> -- log into the Dashboard once, copy the token from browser devtools (Application/Storage tab, or the Authorization header on any XHR), and paste that. Test Case Hub sends it as-is in every request's Authorization header.</p>
         ${state.envCredentialsLoading ? '<p class="sub">Loading…</p>' : `
           <table style="margin-bottom:8px;">
             <thead><tr><th>Label</th><th>Email</th><th>Tag</th><th>Password set</th><th></th></tr></thead>
-            <tbody>${credRows || '<tr><td colspan="5" class="empty">No credentials yet.</td></tr>'}</tbody>
+            <tbody>${credRows || '<tr><td colspan="6" class="empty">No credentials yet.</td></tr>'}</tbody>
           </table>
         `}
         ${canEditContent() ? `<div class="actions-row"><button type="button" class="secondary small" data-toggle-add-credential="${e.id}">${state.showAddCredential ? 'Cancel' : '+ Add credential'}</button></div>` : ''}
@@ -2271,20 +2312,25 @@ function renderEnvironments(){
     `;
     const isEditing = state.editingEnvId === e.id;
     const editBlock = !isEditing ? '' : `
-      <tr><td colspan="5" style="background:var(--bg-soft);padding:12px;">
+      <tr><td colspan="6" style="background:var(--bg-soft);padding:12px;">
         <strong style="font-size:13px;">Edit environment</strong>
         <div class="grid2" style="margin-top:8px;">
           <div class="field"><label>Name</label><input type="text" id="editEnvName_${e.id}" value="${escapeHtml(e.name)}"></div>
           <div class="field"><label>Tenant</label><input type="text" id="editEnvTenant_${e.id}" value="${escapeHtml(e.tenant||'')}"></div>
           <div class="field"><label>Type</label><select id="editEnvType_${e.id}"><option ${e.environmentType==='Staging'?'selected':''}>Staging</option><option ${e.environmentType==='Production'?'selected':''}>Production</option></select></div>
-          ${(state.automationPlatform==='App'||state.automationPlatform==='Both') ? `<div class="field"><label>App URL</label><input type="text" id="editEnvAppUrl_${e.id}" value="${escapeHtml(e.appBaseUrl||'')}"></div>` : ''}
-          ${state.automationPlatform==='Dashboard' ? `<div class="field"><label>Dashboard URL</label><input type="text" id="editEnvDashUrl_${e.id}" value="${escapeHtml(e.dashboardBaseUrl||'')}"> <small class="muted">Must be the BACKEND API host (e.g. fa-dashboard-apis[-beta].fieldassist.io), NOT the frontend app host (dashboard[-beta].fieldassist.io). This one field covers Dashboard's own API too -- native Run for Dashboard scripts hits it directly.</small></div>` : ''}
-          ${(state.automationPlatform==='App-API'||state.automationPlatform==='Both') ? `<div class="field"><label>App API URL</label><input type="text" id="editEnvApiUrl_${e.id}" value="${escapeHtml(e.appApiBaseUrl||'')}"></div>` : ''}
-          ${state.automationPlatform==='Dashboard' ? `
+          <div class="field"><label>Platform</label>
+            <select id="editEnvPlatform_${e.id}">
+              <option value="Dashboard" ${state.editEnvPlatformChoice==='Dashboard'?'selected':''}>Dashboard</option>
+              <option value="App-API" ${state.editEnvPlatformChoice==='App-API'?'selected':''}>App API</option>
+              <option value="App" ${state.editEnvPlatformChoice==='App'?'selected':''}>App</option>
+            </select>
+          </div>
+          ${state.editEnvPlatformChoice==='App' ? `<div class="field"><label>App URL</label><input type="text" id="editEnvAppUrl_${e.id}" value="${escapeHtml(e.appBaseUrl||'')}"></div>` : ''}
+          ${state.editEnvPlatformChoice==='Dashboard' ? `<div class="field"><label>Dashboard URL</label><input type="text" id="editEnvDashUrl_${e.id}" value="${escapeHtml(e.dashboardBaseUrl||'')}"> <small class="muted">Must be the BACKEND API host (e.g. fa-dashboard-apis[-beta].fieldassist.io), NOT the frontend app host (dashboard[-beta].fieldassist.io). This one field covers Dashboard's own API too -- native Run for Dashboard scripts hits it directly.</small></div>` : ''}
+          ${state.editEnvPlatformChoice==='App-API' ? `<div class="field"><label>App API URL</label><input type="text" id="editEnvApiUrl_${e.id}" value="${escapeHtml(e.appApiBaseUrl||'')}"></div>` : ''}
           <div class="field"><label>Master DB connection string</label><input type="text" id="editEnvMasterDb_${e.id}" placeholder="${e.hasMasterDbConnection ? 'Set -- leave blank to keep' : 'Not set'}"></div>
           <div class="field"><label>Transaction DB connection string</label><input type="text" id="editEnvTxnDb_${e.id}" placeholder="${e.hasTransactionDbConnection ? 'Set -- leave blank to keep' : 'Not set'}"></div>
           <div class="field"><label>Report DB connection string</label><input type="text" id="editEnvReportDb_${e.id}" placeholder="${e.hasReportDbConnection ? 'Set -- leave blank to keep' : 'Not set'}"></div>
-          ` : ''}
         </div>
         <div class="field"><label><input type="checkbox" id="editEnvRequiresCleanup_${e.id}" ${e.requiresTestDataCleanup ? 'checked' : ''}> Requires test-data cleanup after runs</label></div>
         <div class="actions-row">
@@ -2297,7 +2343,8 @@ function renderEnvironments(){
     <tr>
       <td>${escapeHtml(e.name)}<br><small class="muted">${escapeHtml(e.tenant||'')}</small></td>
       <td><span class="${e.environmentType==='Production'?'badge b-p1':'badge b-active'}">${escapeHtml(e.environmentType)}</span></td>
-      <td>${escapeHtml(e.appBaseUrl||'')}</td>
+      <td><span class="badge">${escapeHtml(e.testingPlatform||'Dashboard')}</span></td>
+      <td>${escapeHtml(e.dashboardBaseUrl||e.appApiBaseUrl||e.appBaseUrl||'')}</td>
       <td>${e.hasMasterDbConnection?'Master ✓ ':''}${e.hasTransactionDbConnection?'Txn ✓ ':''}${e.hasReportDbConnection?'Report ✓':''}</td>
       <td>
         <button type="button" class="small ghost" data-toggle-env-credentials="${e.id}">${expanded ? 'Hide credentials ▾' : 'Credentials ▸'}</button>
@@ -2320,21 +2367,27 @@ function renderEnvironments(){
           <div class="field"><label>Name</label><input type="text" id="envName" placeholder="e.g. Staging - Mars"></div>
           <div class="field"><label>Tenant</label><input type="text" id="envTenant" placeholder="e.g. mars"></div>
           <div class="field"><label>Type</label><select id="envType"><option>Staging</option><option>Production</option></select></div>
-          ${(state.automationPlatform==='App'||state.automationPlatform==='Both') ? `<div class="field"><label>App URL</label><input type="text" id="envAppUrl" placeholder="https://..."></div>` : ''}
-          ${state.automationPlatform==='Dashboard' ? `<div class="field"><label>Dashboard URL</label><input type="text" id="envDashUrl" placeholder="https://..."> <small class="muted">Must be the BACKEND API host (native execution's HTTP steps hit this directly, no browser) -- e.g. fa-dashboard-apis[-beta].fieldassist.io, NOT the frontend app host you see in your browser address bar (dashboard[-beta].fieldassist.io). Pointing this at the frontend host silently returns the SPA's index.html (200 OK) for every /api/... call instead of real JSON. Find the right host via browser devtools Network tab while using the real Dashboard.</small></div>` : ''}
-          ${(state.automationPlatform==='App-API'||state.automationPlatform==='Both') ? `<div class="field"><label>App API URL</label><input type="text" id="envApiUrl" placeholder="https://..."></div>` : ''}
-          ${state.automationPlatform==='Dashboard' ? `
+          <div class="field"><label>Platform</label>
+            <select id="envPlatform">
+              <option value="Dashboard" ${state.envFormPlatform==='Dashboard'?'selected':''}>Dashboard</option>
+              <option value="App-API" ${state.envFormPlatform==='App-API'?'selected':''}>App API</option>
+              <option value="App" ${state.envFormPlatform==='App'?'selected':''}>App</option>
+            </select>
+            <small class="muted">One environment = one concrete piece of infrastructure. Pick the platform this record is for -- only its relevant URL/DB fields matter below.</small>
+          </div>
+          ${state.envFormPlatform==='App' ? `<div class="field"><label>App URL</label><input type="text" id="envAppUrl" placeholder="https://..."></div>` : ''}
+          ${state.envFormPlatform==='Dashboard' ? `<div class="field"><label>Dashboard URL</label><input type="text" id="envDashUrl" placeholder="https://..."> <small class="muted">Must be the BACKEND API host (native execution's HTTP steps hit this directly, no browser) -- e.g. fa-dashboard-apis[-beta].fieldassist.io, NOT the frontend app host you see in your browser address bar (dashboard[-beta].fieldassist.io). Pointing this at the frontend host silently returns the SPA's index.html (200 OK) for every /api/... call instead of real JSON. Find the right host via browser devtools Network tab while using the real Dashboard.</small></div>` : ''}
+          ${state.envFormPlatform==='App-API' ? `<div class="field"><label>App API URL</label><input type="text" id="envApiUrl" placeholder="https://..."></div>` : ''}
           <div class="field"><label>Master DB connection string (optional)</label><input type="text" id="envMasterDb"></div>
           <div class="field"><label>Transaction DB connection string (optional)</label><input type="text" id="envTxnDb"></div>
           <div class="field"><label>Report DB connection string (optional)</label><input type="text" id="envReportDb"></div>
-          ` : ''}
         </div>
         <div class="field"><label><input type="checkbox" id="envRequiresCleanup"> Requires test-data cleanup after runs</label></div>
         <div class="actions-row"><button type="button" id="saveEnvironmentBtn">Save environment</button></div>
       ` : ''}
       <table style="margin-top:14px;">
-        <thead><tr><th>Name</th><th>Type</th><th>App URL</th><th>DB connections</th><th></th></tr></thead>
-        <tbody>${rows || '<tr><td colspan="5" class="empty">No environments yet.</td></tr>'}</tbody>
+        <thead><tr><th>Name</th><th>Type</th><th>Platform</th><th>URL</th><th>DB connections</th><th></th></tr></thead>
+        <tbody>${rows || `<tr><td colspan="6" class="empty">No ${escapeHtml(state.automationPlatform)} environments yet.</td></tr>`}</tbody>
       </table>
       <div class="actions-row"><button type="button" class="ghost" id="closeEnvironments">Close</button></div>
     </div>
@@ -2368,10 +2421,12 @@ async function deleteModuleRepoLink(moduleId, id){
 }
 function renderRepoLinks(){
   const moduleId = state.repoLinksModuleId;
-  const links = moduleId ? (DATA.moduleRepoLinks[moduleId] || []) : [];
+  const allLinks = moduleId ? (DATA.moduleRepoLinks[moduleId] || []) : [];
+  const links = allLinks.filter(l => scriptMatchesPlatform(l.testingPlatform, state.automationPlatform));
   const rows = links.map(l => `
     <tr>
       <td>${escapeHtml(l.layer)}</td>
+      <td><span class="badge">${escapeHtml(l.testingPlatform||'Dashboard')}</span></td>
       <td>${escapeHtml(l.repoHost)}</td>
       <td>${escapeHtml(l.orgOrAccount)}${l.project ? ' / ' + escapeHtml(l.project) : ''}</td>
       <td>${escapeHtml(l.repoName)}<br><small class="muted">${escapeHtml(l.branch)}${l.basePath ? ' — ' + escapeHtml(l.basePath) : ''}</small></td>
@@ -2382,7 +2437,8 @@ function renderRepoLinks(){
   return `
     <div class="panel">
       <h3>Repo Links</h3>
-      <p class="sub" style="margin-top:-6px;">Tells the AI-generation flow WHERE a module's real source code lives — a module can have one link per layer (Frontend/Backend/Database). The access token is read-only and never shown again after saving.</p>
+      <p class="sub" style="margin-top:-6px;">Tells the AI-generation flow WHERE a module's real source code lives — a module can have one link per (Layer, Platform) pair, e.g. a Dashboard Backend link on Azure DevOps AND a separate App Backend link on GitHub side by side. The access token is read-only and never shown again after saving.</p>
+      <p class="sub" style="margin:0 0 8px;">Platform: <strong>${escapeHtml(state.automationPlatform)}</strong> (change from the Automation menu in the sidebar).</p>
       <div class="field" style="max-width:320px;"><label>Module</label>
         <select id="repoLinksModuleSelect">
           <option value="">Select a module…</option>
@@ -2394,6 +2450,11 @@ function renderRepoLinks(){
         ${state.showAddRepoLink ? `
           <div class="grid2">
             <div class="field"><label>Layer</label><select id="repoLinkLayer"><option value="Backend">Backend</option><option value="Frontend">Frontend</option><option value="Database">Database</option><option value="Unspecified">Unspecified</option></select></div>
+            <div class="field"><label>Platform</label>
+              <select id="repoLinkPlatform">
+                ${TestingPlatform_Core3.map(p => `<option value="${p}" ${state.automationPlatform===p?'selected':''}>${escapeHtml(p)}</option>`).join('')}
+              </select>
+            </div>
             <div class="field"><label>Host</label><select id="repoLinkHost"><option value="AzureDevOps">Azure DevOps</option><option value="GitHub">GitHub</option></select></div>
             <div class="field"><label>Org / Account</label><input type="text" id="repoLinkOrg" placeholder="e.g. flick2know or FieldAssist"></div>
             <div class="field"><label>Project (Azure DevOps only)</label><input type="text" id="repoLinkProject" placeholder="e.g. Field_Assist"></div>
@@ -2405,8 +2466,8 @@ function renderRepoLinks(){
           <div class="actions-row"><button type="button" id="saveRepoLinkBtn">Save repo link</button></div>
         ` : ''}
         <table style="margin-top:14px;">
-          <thead><tr><th>Layer</th><th>Host</th><th>Org/Project</th><th>Repo</th><th>Token set</th><th></th></tr></thead>
-          <tbody>${state.repoLinksLoading ? '<tr><td colspan="6" class="empty">Loading…</td></tr>' : (rows || '<tr><td colspan="6" class="empty">No repo linked to this module yet.</td></tr>')}</tbody>
+          <thead><tr><th>Layer</th><th>Platform</th><th>Host</th><th>Org/Project</th><th>Repo</th><th>Token set</th><th></th></tr></thead>
+          <tbody>${state.repoLinksLoading ? '<tr><td colspan="7" class="empty">Loading…</td></tr>' : (rows || `<tr><td colspan="7" class="empty">No ${escapeHtml(state.automationPlatform)} repo linked to this module yet.</td></tr>`)}</tbody>
         </table>
       `}
       <div class="actions-row"><button type="button" class="ghost" id="closeRepoLinks">Close</button></div>
@@ -3944,8 +4005,9 @@ function wireEvents(){
     const name = document.getElementById('staticSuiteName').value.trim();
     const description = document.getElementById('staticSuiteDesc').value.trim();
     const ids = document.getElementById('staticSuiteIds').value.trim();
+    const testingPlatform = document.getElementById('staticSuitePlatform').value;
     if(!name){ showToast('Suite name is required.', 'error'); return; }
-    createStaticSuite(name, description, ids);
+    createStaticSuite(name, description, ids, testingPlatform);
   });
   const saveDynamicSuiteBtn = document.getElementById('saveDynamicSuiteBtn');
   if(saveDynamicSuiteBtn) saveDynamicSuiteBtn.addEventListener('click', () => {
@@ -3961,7 +4023,8 @@ function wireEvents(){
       priority: document.getElementById('dynSuitePriority').value || null,
       tag: document.getElementById('dynSuiteTag').value.trim() || null
     };
-    createDynamicSuite(name, description, filter);
+    const testingPlatform = document.getElementById('dynSuitePlatform').value;
+    createDynamicSuite(name, description, filter, testingPlatform);
   });
   document.querySelectorAll('[data-resolve-suite]').forEach(el => el.addEventListener('click', () => {
     toggleResolveSuite(Number(el.dataset.resolveSuite));
@@ -4031,8 +4094,9 @@ function wireEvents(){
     const envTargetId = document.getElementById('runEnvTarget').value;
     const credentialEl = document.getElementById('runCredential');
     const credentialId = credentialEl ? credentialEl.value : '';
+    const testingPlatform = document.getElementById('runPlatform').value;
     createTestRun({
-      name, targetEnvironment,
+      name, targetEnvironment, testingPlatform,
       releaseId: releaseId ? Number(releaseId) : null,
       suiteId: suiteId ? Number(suiteId) : null,
       environmentTargetId: envTargetId ? Number(envTargetId) : null,
@@ -4087,8 +4151,9 @@ function wireEvents(){
   if(createApiKeyBtn) createApiKeyBtn.addEventListener('click', () => {
     const name = document.getElementById('apiKeyName').value.trim();
     const scope = document.getElementById('apiKeyScope').value.trim();
+    const testingPlatform = document.getElementById('apiKeyPlatform').value;
     if(!name){ showToast('A name is required.', 'error'); return; }
-    createApiKey(name, scope);
+    createApiKey(name, scope, testingPlatform);
   });
   document.querySelectorAll('[data-revoke-apikey]').forEach(el => el.addEventListener('click', () => {
     if(!confirm('Revoke this API key? Any CI pipeline using it will stop working immediately.')) return;
@@ -4107,7 +4172,9 @@ function wireEvents(){
   const closeEnvironments = document.getElementById('closeEnvironments');
   if(closeEnvironments) closeEnvironments.addEventListener('click', () => { state.showEnvironments = false; render(); });
   const toggleCreateEnvironment = document.getElementById('toggleCreateEnvironment');
-  if(toggleCreateEnvironment) toggleCreateEnvironment.addEventListener('click', () => { state.showCreateEnvironment = !state.showCreateEnvironment; render(); });
+  if(toggleCreateEnvironment) toggleCreateEnvironment.addEventListener('click', () => { state.showCreateEnvironment = !state.showCreateEnvironment; if(state.showCreateEnvironment) state.envFormPlatform = TestingPlatform_Core3.includes(state.automationPlatform) ? state.automationPlatform : 'Dashboard'; render(); });
+  const envVal = (id) => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
+
   const saveEnvironmentBtn = document.getElementById('saveEnvironmentBtn');
   if(saveEnvironmentBtn) saveEnvironmentBtn.addEventListener('click', () => {
     const name = document.getElementById('envName').value.trim();
@@ -4116,23 +4183,37 @@ function wireEvents(){
       name,
       tenant: document.getElementById('envTenant').value.trim(),
       environmentType: document.getElementById('envType').value,
-      appBaseUrl: document.getElementById('envAppUrl').value.trim(),
-      dashboardBaseUrl: document.getElementById('envDashUrl').value.trim(),
-      appApiBaseUrl: document.getElementById('envApiUrl').value.trim(),
-      masterDbConnectionString: document.getElementById('envMasterDb').value.trim() || null,
-      transactionDbConnectionString: document.getElementById('envTxnDb').value.trim() || null,
-      reportDbConnectionString: document.getElementById('envReportDb').value.trim() || null,
+      testingPlatform: state.envFormPlatform,
+      appBaseUrl: envVal('envAppUrl'),
+      dashboardBaseUrl: envVal('envDashUrl'),
+      appApiBaseUrl: envVal('envApiUrl'),
+      masterDbConnectionString: envVal('envMasterDb') || null,
+      transactionDbConnectionString: envVal('envTxnDb') || null,
+      reportDbConnectionString: envVal('envReportDb') || null,
       requiresTestDataCleanup: document.getElementById('envRequiresCleanup').checked
     });
+  });
+  const envPlatformSelect = document.getElementById('envPlatform');
+  if(envPlatformSelect) envPlatformSelect.addEventListener('change', (e) => {
+    state.envFormPlatform = e.target.value;
+    render();
   });
 
   document.querySelectorAll('[data-toggle-env-edit]').forEach(el => el.addEventListener('click', () => {
     const envId = Number(el.dataset.toggleEnvEdit);
     state.editingEnvId = state.editingEnvId === envId ? null : envId;
+    if(state.editingEnvId !== null){
+      const env = (DATA.environments||[]).find(e => e.id === envId);
+      state.editEnvPlatformChoice = (env && env.testingPlatform) || 'Dashboard';
+    }
     render();
   }));
   document.querySelectorAll('[data-cancel-env-edit]').forEach(el => el.addEventListener('click', () => {
     state.editingEnvId = null;
+    render();
+  }));
+  document.querySelectorAll('[id^="editEnvPlatform_"]').forEach(el => el.addEventListener('change', (e) => {
+    state.editEnvPlatformChoice = e.target.value;
     render();
   }));
   document.querySelectorAll('[data-save-env-edit]').forEach(el => el.addEventListener('click', () => {
@@ -4143,12 +4224,13 @@ function wireEvents(){
       name,
       tenant: document.getElementById('editEnvTenant_' + envId).value.trim(),
       environmentType: document.getElementById('editEnvType_' + envId).value,
-      appBaseUrl: document.getElementById('editEnvAppUrl_' + envId).value.trim(),
-      dashboardBaseUrl: document.getElementById('editEnvDashUrl_' + envId).value.trim(),
-      appApiBaseUrl: document.getElementById('editEnvApiUrl_' + envId).value.trim(),
-      masterDbConnectionString: document.getElementById('editEnvMasterDb_' + envId).value.trim() || null,
-      transactionDbConnectionString: document.getElementById('editEnvTxnDb_' + envId).value.trim() || null,
-      reportDbConnectionString: document.getElementById('editEnvReportDb_' + envId).value.trim() || null,
+      testingPlatform: state.editEnvPlatformChoice,
+      appBaseUrl: envVal('editEnvAppUrl_' + envId),
+      dashboardBaseUrl: envVal('editEnvDashUrl_' + envId),
+      appApiBaseUrl: envVal('editEnvApiUrl_' + envId),
+      masterDbConnectionString: envVal('editEnvMasterDb_' + envId) || null,
+      transactionDbConnectionString: envVal('editEnvTxnDb_' + envId) || null,
+      reportDbConnectionString: envVal('editEnvReportDb_' + envId) || null,
       requiresTestDataCleanup: document.getElementById('editEnvRequiresCleanup_' + envId).checked
     });
   }));
@@ -4215,6 +4297,7 @@ function wireEvents(){
     if(!orgOrAccount || !repoName){ showToast('Org/Account and Repo name are required.', 'error'); return; }
     createModuleRepoLink(state.repoLinksModuleId, {
       layer: document.getElementById('repoLinkLayer').value,
+      testingPlatform: document.getElementById('repoLinkPlatform').value,
       repoHost: document.getElementById('repoLinkHost').value,
       orgOrAccount,
       project: document.getElementById('repoLinkProject').value.trim(),

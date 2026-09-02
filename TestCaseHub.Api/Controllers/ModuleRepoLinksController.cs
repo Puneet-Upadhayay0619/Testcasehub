@@ -48,18 +48,24 @@ public class ModuleRepoLinksController : ControllerBase
         if (!Models.RepoHost.All.Contains(req.RepoHost)) return BadRequest("RepoHost must be GitHub or AzureDevOps.");
         var layer = string.IsNullOrWhiteSpace(req.Layer) ? RepoLayer.Unspecified : req.Layer;
         if (!RepoLayer.All.Contains(layer)) return BadRequest("Layer must be Frontend, Backend, Database, or Unspecified.");
+        var testingPlatform = string.IsNullOrWhiteSpace(req.TestingPlatform) ? Models.TestingPlatform.Dashboard : req.TestingPlatform;
+        if (!Models.TestingPlatform.Core3.Contains(testingPlatform)) return BadRequest("TestingPlatform must be Dashboard, App-API, or App.");
         if (string.IsNullOrWhiteSpace(req.OrgOrAccount)) return BadRequest("OrgOrAccount is required.");
         if (string.IsNullOrWhiteSpace(req.RepoName)) return BadRequest("RepoName is required.");
         if (req.RepoHost == Models.RepoHost.AzureDevOps && string.IsNullOrWhiteSpace(req.Project))
             return BadRequest("Project is required for Azure DevOps repos.");
 
+        // Uniqueness is per (Layer, TestingPlatform) pair, not Layer alone -- App-API's backend
+        // (Azure DevOps) and App's mobile codebase (GitHub) are both legitimately a "Backend"
+        // repo link on the same module, just for different platforms. Without TestingPlatform in
+        // this check, adding the second would have been wrongly blocked as a duplicate.
         var existing = await _store.GetModuleRepoLinksAsync(moduleId);
-        if (existing.Any(l => l.Layer == layer))
-            return Conflict($"This module already has a repo link for layer '{layer}' -- edit that one instead of creating a second.");
+        if (existing.Any(l => l.Layer == layer && l.TestingPlatform == testingPlatform))
+            return Conflict($"This module already has a '{testingPlatform}' repo link for layer '{layer}' -- edit that one instead of creating a second.");
 
         var link = new ModuleRepoLink
         {
-            ModuleId = moduleId, RepoHost = req.RepoHost, Layer = layer,
+            ModuleId = moduleId, RepoHost = req.RepoHost, Layer = layer, TestingPlatform = testingPlatform,
             OrgOrAccount = req.OrgOrAccount.Trim(), Project = req.Project?.Trim() ?? "",
             RepoName = req.RepoName.Trim(), Branch = string.IsNullOrWhiteSpace(req.Branch) ? "main" : req.Branch.Trim(),
             BasePath = req.BasePath?.Trim() ?? "", CreatedBy = ActorDisplayName
@@ -83,8 +89,10 @@ public class ModuleRepoLinksController : ControllerBase
         if (!Models.RepoHost.All.Contains(req.RepoHost)) return BadRequest("RepoHost must be GitHub or AzureDevOps.");
         var layer = string.IsNullOrWhiteSpace(req.Layer) ? RepoLayer.Unspecified : req.Layer;
         if (!RepoLayer.All.Contains(layer)) return BadRequest("Layer must be Frontend, Backend, Database, or Unspecified.");
+        var testingPlatform = string.IsNullOrWhiteSpace(req.TestingPlatform) ? link.TestingPlatform : req.TestingPlatform;
+        if (!Models.TestingPlatform.Core3.Contains(testingPlatform)) return BadRequest("TestingPlatform must be Dashboard, App-API, or App.");
 
-        link.RepoHost = req.RepoHost; link.Layer = layer;
+        link.RepoHost = req.RepoHost; link.Layer = layer; link.TestingPlatform = testingPlatform;
         link.OrgOrAccount = req.OrgOrAccount.Trim(); link.Project = req.Project?.Trim() ?? "";
         link.RepoName = req.RepoName.Trim(); link.Branch = string.IsNullOrWhiteSpace(req.Branch) ? "main" : req.Branch.Trim();
         link.BasePath = req.BasePath?.Trim() ?? "";

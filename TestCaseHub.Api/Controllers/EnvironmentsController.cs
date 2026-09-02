@@ -40,13 +40,15 @@ public class EnvironmentsController : ControllerBase
         if (companyId is null) return User.IsSuperAdmin() ? BadRequest("SuperAdmin must specify ?companyId=.") : Forbid();
         if (string.IsNullOrWhiteSpace(req.Name)) return BadRequest("Name is required.");
         if (!Models.EnvironmentType.All.Contains(req.EnvironmentType)) return BadRequest("EnvironmentType must be Staging or Production.");
+        var testingPlatform = string.IsNullOrWhiteSpace(req.TestingPlatform) ? Models.TestingPlatform.Dashboard : req.TestingPlatform;
+        if (!Models.TestingPlatform.Core3.Contains(testingPlatform)) return BadRequest("TestingPlatform must be Dashboard, App-API, or App -- an environment is one concrete piece of infrastructure, not a combined view.");
 
         var env = new EnvironmentTarget
         {
             CompanyId = companyId.Value,
             Name = req.Name.Trim(), Tenant = req.Tenant ?? "", EnvironmentType = req.EnvironmentType,
             DashboardBaseUrl = req.DashboardBaseUrl ?? "", AppApiBaseUrl = req.AppApiBaseUrl ?? "", AppBaseUrl = req.AppBaseUrl ?? "",
-            RequiresTestDataCleanup = req.RequiresTestDataCleanup, CreatedBy = ActorDisplayName
+            RequiresTestDataCleanup = req.RequiresTestDataCleanup, TestingPlatform = testingPlatform, CreatedBy = ActorDisplayName
         };
         if (!string.IsNullOrWhiteSpace(req.MasterDbConnectionString)) env.MasterDbConnectionStringEncrypted = _protector.Protect(req.MasterDbConnectionString);
         if (!string.IsNullOrWhiteSpace(req.TransactionDbConnectionString)) env.TransactionDbConnectionStringEncrypted = _protector.Protect(req.TransactionDbConnectionString);
@@ -69,10 +71,12 @@ public class EnvironmentsController : ControllerBase
         if (!User.HasCompanyAccess(env.CompanyId)) return Forbid();
         if (string.IsNullOrWhiteSpace(req.Name)) return BadRequest("Name is required.");
         if (!Models.EnvironmentType.All.Contains(req.EnvironmentType)) return BadRequest("EnvironmentType must be Staging or Production.");
+        var testingPlatform = string.IsNullOrWhiteSpace(req.TestingPlatform) ? env.TestingPlatform : req.TestingPlatform;
+        if (!Models.TestingPlatform.Core3.Contains(testingPlatform)) return BadRequest("TestingPlatform must be Dashboard, App-API, or App -- an environment is one concrete piece of infrastructure, not a combined view.");
 
         env.Name = req.Name.Trim(); env.Tenant = req.Tenant ?? ""; env.EnvironmentType = req.EnvironmentType;
         env.DashboardBaseUrl = req.DashboardBaseUrl ?? ""; env.AppApiBaseUrl = req.AppApiBaseUrl ?? ""; env.AppBaseUrl = req.AppBaseUrl ?? "";
-        env.RequiresTestDataCleanup = req.RequiresTestDataCleanup;
+        env.RequiresTestDataCleanup = req.RequiresTestDataCleanup; env.TestingPlatform = testingPlatform;
         if (!string.IsNullOrWhiteSpace(req.MasterDbConnectionString)) env.MasterDbConnectionStringEncrypted = _protector.Protect(req.MasterDbConnectionString);
         if (!string.IsNullOrWhiteSpace(req.TransactionDbConnectionString)) env.TransactionDbConnectionStringEncrypted = _protector.Protect(req.TransactionDbConnectionString);
         if (!string.IsNullOrWhiteSpace(req.ReportDbConnectionString)) env.ReportDbConnectionStringEncrypted = _protector.Protect(req.ReportDbConnectionString);

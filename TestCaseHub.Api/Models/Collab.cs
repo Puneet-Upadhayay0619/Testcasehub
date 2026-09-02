@@ -27,6 +27,14 @@ public class TestSuite
     public string CreatedBy { get; set; } = "";
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
+    // Mandatory platform tag (TestingPlatform.All) -- applies to BOTH Static and Dynamic suites,
+    // set explicitly at creation. Separate from the optional "Layer" criterion Dynamic suites
+    // may also carry inside FilterJson (which test cases match), since a suite's own platform
+    // classification and its matching criterion can legitimately differ. Existing rows migrate
+    // to Dashboard.
+    [MaxLength(16)]
+    public string TestingPlatform { get; set; } = Models.TestingPlatform.Dashboard;
+
     [NotMapped]
     public List<string> TestCaseIds
     {

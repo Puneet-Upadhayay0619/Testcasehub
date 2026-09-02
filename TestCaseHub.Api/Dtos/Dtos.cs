@@ -79,12 +79,12 @@ public record InviteLinkResponse(int Id, string Code, int MaxUses, int UsedCount
         new(i.Id, i.Code, i.MaxUses, i.UsedCount, i.ExpiresAt, i.Revoked, i.CreatedByEmail, i.CreatedAt, i.IsUsable);
 }
 
-public record CreateStaticSuiteRequest(string Name, string Description, List<string> TestCaseIds);
-public record CreateDynamicSuiteRequest(string Name, string Description, int? ModuleId, string? Layer, string? VerificationType, string? Status, string? Priority, string? Tag, string? Search);
-public record SuiteResponse(int Id, string Name, string Description, string Kind, List<string> TestCaseIds, string FilterJson, string CreatedBy, DateTime CreatedAt)
+public record CreateStaticSuiteRequest(string Name, string Description, List<string> TestCaseIds, string TestingPlatform);
+public record CreateDynamicSuiteRequest(string Name, string Description, int? ModuleId, string? Layer, string? VerificationType, string? Status, string? Priority, string? Tag, string? Search, string TestingPlatform);
+public record SuiteResponse(int Id, string Name, string Description, string Kind, List<string> TestCaseIds, string FilterJson, string CreatedBy, DateTime CreatedAt, string TestingPlatform)
 {
     public static SuiteResponse From(TestCaseHub.Api.Models.TestSuite s) =>
-        new(s.Id, s.Name, s.Description, s.Kind, s.TestCaseIds, s.FilterJson, s.CreatedBy, s.CreatedAt);
+        new(s.Id, s.Name, s.Description, s.Kind, s.TestCaseIds, s.FilterJson, s.CreatedBy, s.CreatedAt, s.TestingPlatform);
 }
 
 public record BulkEditRequest(List<string> Ids, string? Priority, string? Status, List<string>? AddTags, List<string>? RemoveTags, string? HistoryComment);
@@ -111,11 +111,11 @@ public record ReleaseResponse(int Id, string Name, string Version, string Status
 }
 public record TransitionReleaseRequest(string NewStatus, string? Comment);
 
-public record CreateTestRunRequest(int? ReleaseId, int? SuiteId, string Name, string TargetEnvironment, int? EnvironmentTargetId = null, int? EnvironmentCredentialId = null);
-public record TestRunResponse(int Id, int? ReleaseId, int? SuiteId, string Name, string TargetEnvironment, int? EnvironmentTargetId, int? EnvironmentCredentialId, string CreatedBy, DateTime CreatedAt)
+public record CreateTestRunRequest(int? ReleaseId, int? SuiteId, string Name, string TargetEnvironment, int? EnvironmentTargetId = null, int? EnvironmentCredentialId = null, string? TestingPlatform = null);
+public record TestRunResponse(int Id, int? ReleaseId, int? SuiteId, string Name, string TargetEnvironment, int? EnvironmentTargetId, int? EnvironmentCredentialId, string CreatedBy, DateTime CreatedAt, string TestingPlatform)
 {
     public static TestRunResponse From(TestCaseHub.Api.Models.TestRun t) =>
-        new(t.Id, t.ReleaseId, t.SuiteId, t.Name, t.TargetEnvironment, t.EnvironmentTargetId, t.EnvironmentCredentialId, t.CreatedBy, t.CreatedAt);
+        new(t.Id, t.ReleaseId, t.SuiteId, t.Name, t.TargetEnvironment, t.EnvironmentTargetId, t.EnvironmentCredentialId, t.CreatedBy, t.CreatedAt, t.TestingPlatform);
 }
 
 public record RecordManualResultRequest(string TestCaseId, string? Platform, string Status, string? Notes);
@@ -133,20 +133,20 @@ public record ReleaseTrendPoint(int ReleaseId, string ReleaseName, double PassRa
 
 public record NotificationResponse(int Id, string Type, string Message, bool Read, DateTime CreatedAt);
 
-public record CreateApiKeyRequest(string Name, string? Scope);
-public record ApiKeyResponse(int Id, string Name, string Scope, bool Revoked, string CreatedBy, DateTime CreatedAt, DateTime? LastUsedAt)
+public record CreateApiKeyRequest(string Name, string? Scope, string? TestingPlatform = null);
+public record ApiKeyResponse(int Id, string Name, string Scope, bool Revoked, string CreatedBy, DateTime CreatedAt, DateTime? LastUsedAt, string TestingPlatform)
 {
-    public static ApiKeyResponse From(TestCaseHub.Api.Models.ApiKey k) => new(k.Id, k.Name, k.Scope, k.Revoked, k.CreatedBy, k.CreatedAt, k.LastUsedAt);
+    public static ApiKeyResponse From(TestCaseHub.Api.Models.ApiKey k) => new(k.Id, k.Name, k.Scope, k.Revoked, k.CreatedBy, k.CreatedAt, k.LastUsedAt, k.TestingPlatform);
 }
 public record IssuedApiKeyResponse(int Id, string Name, string RawKey);
 
-public record CreateEnvironmentTargetRequest(string Name, string Tenant, string EnvironmentType, string DashboardBaseUrl, string AppApiBaseUrl, string AppBaseUrl, string? MasterDbConnectionString, string? TransactionDbConnectionString, string? ReportDbConnectionString, bool RequiresTestDataCleanup);
-public record EnvironmentTargetResponse(int Id, string Name, string Tenant, string EnvironmentType, string DashboardBaseUrl, string AppApiBaseUrl, string AppBaseUrl, bool HasMasterDbConnection, bool HasTransactionDbConnection, bool HasReportDbConnection, bool RequiresTestDataCleanup, int? TestCompanyId, int? TestCompanyBId, int? TestReservedModuleEnum, bool AllowDestructiveTestSql, string CreatedBy, DateTime CreatedAt)
+public record CreateEnvironmentTargetRequest(string Name, string Tenant, string EnvironmentType, string DashboardBaseUrl, string AppApiBaseUrl, string AppBaseUrl, string? MasterDbConnectionString, string? TransactionDbConnectionString, string? ReportDbConnectionString, bool RequiresTestDataCleanup, string? TestingPlatform = null);
+public record EnvironmentTargetResponse(int Id, string Name, string Tenant, string EnvironmentType, string DashboardBaseUrl, string AppApiBaseUrl, string AppBaseUrl, bool HasMasterDbConnection, bool HasTransactionDbConnection, bool HasReportDbConnection, bool RequiresTestDataCleanup, int? TestCompanyId, int? TestCompanyBId, int? TestReservedModuleEnum, bool AllowDestructiveTestSql, string CreatedBy, DateTime CreatedAt, string TestingPlatform)
 {
     public static EnvironmentTargetResponse From(TestCaseHub.Api.Models.EnvironmentTarget e) => new(
         e.Id, e.Name, e.Tenant, e.EnvironmentType, e.DashboardBaseUrl, e.AppApiBaseUrl, e.AppBaseUrl,
         !string.IsNullOrEmpty(e.MasterDbConnectionStringEncrypted), !string.IsNullOrEmpty(e.TransactionDbConnectionStringEncrypted), !string.IsNullOrEmpty(e.ReportDbConnectionStringEncrypted),
-        e.RequiresTestDataCleanup, e.TestCompanyId, e.TestCompanyBId, e.TestReservedModuleEnum, e.AllowDestructiveTestSql, e.CreatedBy, e.CreatedAt
+        e.RequiresTestDataCleanup, e.TestCompanyId, e.TestCompanyBId, e.TestReservedModuleEnum, e.AllowDestructiveTestSql, e.CreatedBy, e.CreatedAt, e.TestingPlatform
     );
 }
 // Sets the real FieldAssist tenant CompanyId(s)/reserved test module used to scope native
@@ -161,12 +161,12 @@ public record CreateBugFromResultResponse(bool Success, string? WorkItemId, stri
 // ---- Automation-generation architecture: repo links, per-environment credentials, generated
 // scripts (agreed in planning) ----
 
-public record CreateModuleRepoLinkRequest(string RepoHost, string Layer, string OrgOrAccount, string? Project, string RepoName, string? Branch, string? BasePath, string? AccessToken);
-public record ModuleRepoLinkResponse(int Id, int ModuleId, string RepoHost, string Layer, string OrgOrAccount, string Project, string RepoName, string Branch, string BasePath, bool HasAccessToken, string CreatedBy, DateTime CreatedAt, string UpdatedBy, DateTime? UpdatedAt)
+public record CreateModuleRepoLinkRequest(string RepoHost, string Layer, string OrgOrAccount, string? Project, string RepoName, string? Branch, string? BasePath, string? AccessToken, string? TestingPlatform = null);
+public record ModuleRepoLinkResponse(int Id, int ModuleId, string RepoHost, string Layer, string OrgOrAccount, string Project, string RepoName, string Branch, string BasePath, bool HasAccessToken, string CreatedBy, DateTime CreatedAt, string UpdatedBy, DateTime? UpdatedAt, string TestingPlatform)
 {
     public static ModuleRepoLinkResponse From(TestCaseHub.Api.Models.ModuleRepoLink l) => new(
         l.Id, l.ModuleId, l.RepoHost, l.Layer, l.OrgOrAccount, l.Project, l.RepoName, l.Branch, l.BasePath,
-        !string.IsNullOrEmpty(l.AccessTokenEncrypted), l.CreatedBy, l.CreatedAt, l.UpdatedBy, l.UpdatedAt
+        !string.IsNullOrEmpty(l.AccessTokenEncrypted), l.CreatedBy, l.CreatedAt, l.UpdatedBy, l.UpdatedAt, l.TestingPlatform
     );
 }
 
