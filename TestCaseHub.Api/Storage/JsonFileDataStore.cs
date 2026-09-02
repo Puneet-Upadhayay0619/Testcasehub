@@ -703,6 +703,15 @@ public class JsonFileDataStore : IDataStore
                 .Select(s => (int?)s.Version).DefaultIfEmpty(0).Max();
             script.Version = (currentMax ?? 0) + 1;
             script.Id = _data.NextAutomationScriptId++;
+            // Inherit Layer from the linked test case when the caller didn't set one explicitly
+            // -- so "TC-UWMC-DSH-012" (Layer="Dashboard") produces a script that's filed under
+            // Dashboard in the platform selector without every save call needing to pass it.
+            if (string.IsNullOrWhiteSpace(script.Layer))
+            {
+                var tc = string.IsNullOrWhiteSpace(script.TestCaseId) ? null
+                    : _data.TestCases.FirstOrDefault(t => t.Id == script.TestCaseId);
+                script.Layer = !string.IsNullOrWhiteSpace(tc?.Layer) ? tc!.Layer : "Dashboard";
+            }
             _data.AutomationScripts.Add(script);
             await PersistAsync();
             return script;
@@ -731,6 +740,15 @@ public class JsonFileDataStore : IDataStore
         {
             var script = _data.AutomationScripts.First(s => s.Id == id);
             script.TestTier = testTier;
+            await PersistAsync();
+            return script;
+        });
+
+    public Task<AutomationScript> SetLayerAsync(int id, string layer) =>
+        WithLockAsync(async () =>
+        {
+            var script = _data.AutomationScripts.First(s => s.Id == id);
+            script.Layer = layer;
             await PersistAsync();
             return script;
         });

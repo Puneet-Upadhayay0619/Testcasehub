@@ -202,16 +202,18 @@ public record GenerateAutomationScriptsBatchRequest(int ModuleId, string? Layer,
 public record BatchGenerationItemResult(string TestCaseId, bool Success, string? Error, AutomationScriptResponse? Script, List<string> Warnings);
 public record BatchGenerationResponse(int Requested, int Succeeded, int Failed, List<BatchGenerationItemResult> Items);
 
-public record SaveAutomationScriptRequest(int ModuleId, string? TestCaseId, int? SuiteId, string FileName, string? Framework, string Content, string? GeneratedBy, string? SourceRepoRefs);
+public record SaveAutomationScriptRequest(int ModuleId, string? TestCaseId, int? SuiteId, string FileName, string? Framework, string Content, string? GeneratedBy, string? SourceRepoRefs, string? Layer = null);
 public record UpdateAutomationScriptStatusRequest(string Status);
-public record AutomationScriptResponse(int Id, int CompanyId, int ModuleId, string? TestCaseId, int? SuiteId, string FileName, string Framework, string Content, string Status, string GeneratedBy, DateTime GeneratedAt, int Version, string SourceRepoRefs, bool HasExecutionDefinition, string TestTier)
+public record AutomationScriptResponse(int Id, int CompanyId, int ModuleId, string? TestCaseId, int? SuiteId, string FileName, string Framework, string Content, string Status, string GeneratedBy, DateTime GeneratedAt, int Version, string SourceRepoRefs, bool HasExecutionDefinition, string TestTier, string Layer)
 {
     public static AutomationScriptResponse From(TestCaseHub.Api.Models.AutomationScript s) => new(
         s.Id, s.CompanyId, s.ModuleId, s.TestCaseId, s.SuiteId, s.FileName, s.Framework, s.Content, s.Status, s.GeneratedBy, s.GeneratedAt, s.Version, s.SourceRepoRefs,
-        !string.IsNullOrWhiteSpace(s.ExecutionDefinitionJson), s.TestTier
+        !string.IsNullOrWhiteSpace(s.ExecutionDefinitionJson), s.TestTier, s.Layer
     );
 }
 public record UpdateAutomationScriptTierRequest(string TestTier);
+// Platform selector (Dashboard / App-API / App) -- same Contributor+ bar as the tier PATCH above.
+public record UpdateAutomationScriptLayerRequest(string Layer);
 
 // Native execution (agreed: "test case hub se hi complete testing") -- set once per script by
 // whoever converts its Playwright logic into the step DSL, then re-used by every future Run.
@@ -227,7 +229,7 @@ public record ExecuteAutomationScriptResponse(bool Passed, string Status, List<s
 // Batch "Run tier" -- runs every Approved script in a Module+TestTier that has a native
 // execution definition, one after another, against the same EnvironmentTarget/credential/mode.
 // Mirrors the single-script Execute contract but returns one outcome per script plus a summary.
-public record ExecuteBatchRequest(int ModuleId, string TestTier, int EnvironmentTargetId, int? EnvironmentCredentialId, int? TestRunId, string? Mode);
+public record ExecuteBatchRequest(int ModuleId, string TestTier, int EnvironmentTargetId, int? EnvironmentCredentialId, int? TestRunId, string? Mode, string? Layer = null);
 public record ExecuteBatchItemResult(int ScriptId, string? TestCaseId, string FileName, bool Passed, string Status, string? Error, int? TestRunResultId);
 public record ExecuteBatchResponse(int Total, int Passed, int Failed, int Skipped, List<ExecuteBatchItemResult> Items);
 

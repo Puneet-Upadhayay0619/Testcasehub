@@ -213,6 +213,14 @@ public class EfCoreDataStore : IDataStore
                 && s.TestCaseId == script.TestCaseId && s.FileName == script.FileName)
             .Select(s => (int?)s.Version).MaxAsync();
         script.Version = (currentMax ?? 0) + 1;
+        // Inherit Layer from the linked test case when the caller didn't set one explicitly --
+        // see the matching comment in JsonFileDataStore.SaveAutomationScriptAsync.
+        if (string.IsNullOrWhiteSpace(script.Layer))
+        {
+            var tc = string.IsNullOrWhiteSpace(script.TestCaseId) ? null
+                : await _db.TestCases.FirstOrDefaultAsync(t => t.Id == script.TestCaseId);
+            script.Layer = !string.IsNullOrWhiteSpace(tc?.Layer) ? tc!.Layer : "Dashboard";
+        }
         _db.AutomationScripts.Add(script);
         await _db.SaveChangesAsync();
         return script;
@@ -236,6 +244,14 @@ public class EfCoreDataStore : IDataStore
     {
         var script = await _db.AutomationScripts.FirstAsync(s => s.Id == id);
         script.TestTier = testTier;
+        await _db.SaveChangesAsync();
+        return script;
+    }
+
+    public async Task<AutomationScript> SetLayerAsync(int id, string layer)
+    {
+        var script = await _db.AutomationScripts.FirstAsync(s => s.Id == id);
+        script.Layer = layer;
         await _db.SaveChangesAsync();
         return script;
     }

@@ -419,6 +419,7 @@ if (storageMode == "SqlServer")
             // Smoke/Sanity/Regression tier (default Regression) for batch "Run tier" execution.
             @"ALTER TABLE ""EnvironmentTargets"" ADD COLUMN IF NOT EXISTS ""AllowDestructiveTestSql"" boolean NOT NULL DEFAULT false;",
             @"ALTER TABLE ""AutomationScripts"" ADD COLUMN IF NOT EXISTS ""TestTier"" varchar(16) NOT NULL DEFAULT 'Regression';",
+            @"ALTER TABLE ""AutomationScripts"" ADD COLUMN IF NOT EXISTS ""Layer"" varchar(16) NOT NULL DEFAULT '';",
 
             // Data Protection key ring storage (see PostgresXmlRepository.cs) -- must exist
             // before AddDataProtection() tries to read/write keys through it.

@@ -68,7 +68,7 @@ public class AutomationScriptsController : ControllerBase
             CompanyId = companyIdResolved.Value, ModuleId = req.ModuleId, TestCaseId = req.TestCaseId, SuiteId = req.SuiteId,
             FileName = req.FileName.Trim(), Framework = req.Framework ?? "", Content = req.Content,
             GeneratedBy = string.IsNullOrWhiteSpace(req.GeneratedBy) ? ActorDisplayName : req.GeneratedBy,
-            SourceRepoRefs = req.SourceRepoRefs ?? ""
+            SourceRepoRefs = req.SourceRepoRefs ?? "", Layer = req.Layer ?? ""
         };
         script = await _store.SaveAutomationScriptAsync(script);
         return Ok(AutomationScriptResponse.From(script));
@@ -122,6 +122,22 @@ public class AutomationScriptsController : ControllerBase
         if (!TestTier.All.Contains(req.TestTier)) return BadRequest("TestTier must be Smoke, Sanity, or Regression.");
 
         script = await _store.SetTestTierAsync(id, req.TestTier);
+        return Ok(AutomationScriptResponse.From(script));
+    }
+
+    // Platform selector (see AutomationScript.Layer) -- lets a script be manually re-filed under
+    // a different platform than what it inherited from its linked test case at save time (or
+    // given one at all, for scripts saved without a TestCaseId).
+    [HttpPatch("{id:int}/layer")]
+    public async Task<ActionResult<AutomationScriptResponse>> SetLayer(int id, UpdateAutomationScriptLayerRequest req)
+    {
+        if (!User.CanManageAutomationScripts()) return Forbid();
+        var script = await _store.GetAutomationScriptAsync(id);
+        if (script is null) return NotFound("Automation script not found.");
+        if (!User.HasCompanyAccess(script.CompanyId)) return Forbid();
+        if (!new[] { "Dashboard", "App-API", "App" }.Contains(req.Layer)) return BadRequest("Layer must be Dashboard, App-API, or App.");
+
+        script = await _store.SetLayerAsync(id, req.Layer);
         return Ok(AutomationScriptResponse.From(script));
     }
 // "Direct API" generation path (agreed alongside the existing MCP-based one): calls Claude
@@ -283,6 +299,7 @@ public class AutomationScriptsController : ControllerBase
         var mode = ParseExecutionMode(req.Mode);
         var candidates = (await _store.GetAutomationScriptsAsync(effective.Value, req.ModuleId, null, null))
             .Where(s => s.TestTier == req.TestTier && s.Status == AutomationScriptStatus.Approved && !string.IsNullOrWhiteSpace(s.ExecutionDefinitionJson))
+            .Where(s => string.IsNullOrEmpty(req.Layer) || s.Layer == req.Layer)
             .ToList();
 
         var items = new List<ExecuteBatchItemResult>();

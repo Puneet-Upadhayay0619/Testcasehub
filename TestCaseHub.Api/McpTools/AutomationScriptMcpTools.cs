@@ -64,6 +64,7 @@ public class AutomationScriptMcpTools
         [Description("Test suite this script belongs to, if any (optional)")] int? suiteId = null,
         [Description("e.g. 'Playwright-TypeScript' (optional)")] string? framework = null,
         [Description("Comma-separated ModuleRepoLink Ids that fed this generation (optional, for traceability)")] string? sourceRepoRefs = null,
+        [Description("Platform this script belongs to: Dashboard, App-API, or App (optional -- when omitted, inherited from the linked testCaseId's own Layer, or defaults to Dashboard if there is no linked test case)")] string? layer = null,
         int? companyId = null)
     {
         if (!user.CanManageAutomationScripts())
@@ -82,7 +83,8 @@ public class AutomationScriptMcpTools
         {
             CompanyId = effective.Value, ModuleId = moduleId, TestCaseId = testCaseId, SuiteId = suiteId,
             FileName = fileName.Trim(), Framework = framework ?? "", Content = content,
-            GeneratedBy = $"AI (Claude via MCP) -- {DisplayNameOf(user)}", SourceRepoRefs = sourceRepoRefs ?? ""
+            GeneratedBy = $"AI (Claude via MCP) -- {DisplayNameOf(user)}", SourceRepoRefs = sourceRepoRefs ?? "",
+            Layer = layer ?? ""
         };
         script = await _store.SaveAutomationScriptAsync(script);
         return AutomationScriptResponse.From(script);

@@ -118,6 +118,36 @@ const LAYERS = [
   {v:'App-API', code:'API', label:'App API'},
   {v:'App', code:'APP', label:'App'}
 ];
+// Platform selector for the Automation section (Test Suites / Environment Targets / Scripts) --
+// confirmed design: "Dashboard" bundles the Dashboard app together with its own backend API
+// (there's no separate Dashboard-API URL field -- DashboardBaseUrl already IS that API host),
+// "App API" and "App" are each their own bucket, and "Both" is a combined view for end-to-end
+// mobile flows that touch both layers at once. Native Run stays exactly as-is for Dashboard and
+// App API (same ScriptExecutionService, just a different base URL -- see script.Layer routing
+// in RunHttpStepAsync); App has no native Run at all (see the placeholder in renderRunScriptPanel
+// and the Blocked check in ScriptExecutionService.ExecuteAsync).
+const PLATFORMS = [
+  {v:'Dashboard', label:'Dashboard'},
+  {v:'App-API', label:'App API'},
+  {v:'App', label:'App'},
+  {v:'Both', label:'App + App API'}
+];
+function scriptMatchesPlatform(layer, platform){
+  const l = layer || 'Dashboard'; // legacy/unset scripts default to Dashboard, same as the backend
+  if(platform === 'Both') return l === 'App' || l === 'App-API';
+  return l === platform;
+}
+function setAutomationPlatform(v){
+  state.automationPlatform = v;
+  render();
+}
+function renderPlatformSelector(){
+  return `
+    <div class="actions-row" style="margin-top:0;flex-wrap:wrap;">
+      ${PLATFORMS.map(p => `<button type="button" class="small ${state.automationPlatform===p.v?'':'ghost'}" data-set-platform="${p.v}">${escapeHtml(p.label)}</button>`).join('')}
+    </div>
+  `;
+}
 const VERIFICATION_TYPES = [
   {v:'UI', label:'UI'},
   {v:'Database', label:'Database'},
@@ -537,6 +567,7 @@ let state = {
   editingRepoLinkId: null,
   showAutomationScripts: false,
   automationScriptsLoading: false,
+  automationPlatform: 'Dashboard', // Dashboard | App-API | App | Both -- filters Scripts list + adapts Environment Target form fields + Run UI, see PLATFORMS below
   automationScriptsModuleId: '',
   automationScriptsTestCaseId: '',
   viewingScriptId: null,
@@ -2231,12 +2262,14 @@ function renderEnvironments(){
           <div class="field"><label>Name</label><input type="text" id="editEnvName_${e.id}" value="${escapeHtml(e.name)}"></div>
           <div class="field"><label>Tenant</label><input type="text" id="editEnvTenant_${e.id}" value="${escapeHtml(e.tenant||'')}"></div>
           <div class="field"><label>Type</label><select id="editEnvType_${e.id}"><option ${e.environmentType==='Staging'?'selected':''}>Staging</option><option ${e.environmentType==='Production'?'selected':''}>Production</option></select></div>
-          <div class="field"><label>App URL</label><input type="text" id="editEnvAppUrl_${e.id}" value="${escapeHtml(e.appBaseUrl||'')}"></div>
-          <div class="field"><label>Dashboard URL</label><input type="text" id="editEnvDashUrl_${e.id}" value="${escapeHtml(e.dashboardBaseUrl||'')}"> <small class="muted">Must be the BACKEND API host (e.g. fa-dashboard-apis[-beta].fieldassist.io), NOT the frontend app host (dashboard[-beta].fieldassist.io).</small></div>
-          <div class="field"><label>App API URL</label><input type="text" id="editEnvApiUrl_${e.id}" value="${escapeHtml(e.appApiBaseUrl||'')}"></div>
+          ${(state.automationPlatform==='App'||state.automationPlatform==='Both') ? `<div class="field"><label>App URL</label><input type="text" id="editEnvAppUrl_${e.id}" value="${escapeHtml(e.appBaseUrl||'')}"></div>` : ''}
+          ${state.automationPlatform==='Dashboard' ? `<div class="field"><label>Dashboard URL</label><input type="text" id="editEnvDashUrl_${e.id}" value="${escapeHtml(e.dashboardBaseUrl||'')}"> <small class="muted">Must be the BACKEND API host (e.g. fa-dashboard-apis[-beta].fieldassist.io), NOT the frontend app host (dashboard[-beta].fieldassist.io). This one field covers Dashboard's own API too -- native Run for Dashboard scripts hits it directly.</small></div>` : ''}
+          ${(state.automationPlatform==='App-API'||state.automationPlatform==='Both') ? `<div class="field"><label>App API URL</label><input type="text" id="editEnvApiUrl_${e.id}" value="${escapeHtml(e.appApiBaseUrl||'')}"></div>` : ''}
+          ${state.automationPlatform==='Dashboard' ? `
           <div class="field"><label>Master DB connection string</label><input type="text" id="editEnvMasterDb_${e.id}" placeholder="${e.hasMasterDbConnection ? 'Set -- leave blank to keep' : 'Not set'}"></div>
           <div class="field"><label>Transaction DB connection string</label><input type="text" id="editEnvTxnDb_${e.id}" placeholder="${e.hasTransactionDbConnection ? 'Set -- leave blank to keep' : 'Not set'}"></div>
           <div class="field"><label>Report DB connection string</label><input type="text" id="editEnvReportDb_${e.id}" placeholder="${e.hasReportDbConnection ? 'Set -- leave blank to keep' : 'Not set'}"></div>
+          ` : ''}
         </div>
         <div class="field"><label><input type="checkbox" id="editEnvRequiresCleanup_${e.id}" ${e.requiresTestDataCleanup ? 'checked' : ''}> Requires test-data cleanup after runs</label></div>
         <div class="actions-row">
@@ -2265,18 +2298,22 @@ function renderEnvironments(){
     <div class="panel">
       <h3>Environment Targets</h3>
       <p class="sub" style="margin-top:-6px;">Staging/Production configs — connection strings are encrypted at rest and never shown again after saving.</p>
+      <p class="sub" style="margin:0 0 4px;">Platform:</p>
+      ${renderPlatformSelector()}
       ${canEditContent() ? `<div class="actions-row"><button type="button" class="secondary small" id="toggleCreateEnvironment">${state.showCreateEnvironment?'Cancel':'+ Add environment'}</button></div>` : ''}
       ${state.showCreateEnvironment ? `
         <div class="grid2">
           <div class="field"><label>Name</label><input type="text" id="envName" placeholder="e.g. Staging - Mars"></div>
           <div class="field"><label>Tenant</label><input type="text" id="envTenant" placeholder="e.g. mars"></div>
           <div class="field"><label>Type</label><select id="envType"><option>Staging</option><option>Production</option></select></div>
-          <div class="field"><label>App URL</label><input type="text" id="envAppUrl" placeholder="https://..."></div>
-          <div class="field"><label>Dashboard URL</label><input type="text" id="envDashUrl" placeholder="https://..."> <small class="muted">Must be the BACKEND API host (native execution's HTTP steps hit this directly, no browser) -- e.g. fa-dashboard-apis[-beta].fieldassist.io, NOT the frontend app host you see in your browser address bar (dashboard[-beta].fieldassist.io). Pointing this at the frontend host silently returns the SPA's index.html (200 OK) for every /api/... call instead of real JSON. Find the right host via browser devtools Network tab while using the real Dashboard.</small></div>
-          <div class="field"><label>App API URL</label><input type="text" id="envApiUrl" placeholder="https://..."></div>
+          ${(state.automationPlatform==='App'||state.automationPlatform==='Both') ? `<div class="field"><label>App URL</label><input type="text" id="envAppUrl" placeholder="https://..."></div>` : ''}
+          ${state.automationPlatform==='Dashboard' ? `<div class="field"><label>Dashboard URL</label><input type="text" id="envDashUrl" placeholder="https://..."> <small class="muted">Must be the BACKEND API host (native execution's HTTP steps hit this directly, no browser) -- e.g. fa-dashboard-apis[-beta].fieldassist.io, NOT the frontend app host you see in your browser address bar (dashboard[-beta].fieldassist.io). Pointing this at the frontend host silently returns the SPA's index.html (200 OK) for every /api/... call instead of real JSON. Find the right host via browser devtools Network tab while using the real Dashboard.</small></div>` : ''}
+          ${(state.automationPlatform==='App-API'||state.automationPlatform==='Both') ? `<div class="field"><label>App API URL</label><input type="text" id="envApiUrl" placeholder="https://..."></div>` : ''}
+          ${state.automationPlatform==='Dashboard' ? `
           <div class="field"><label>Master DB connection string (optional)</label><input type="text" id="envMasterDb"></div>
           <div class="field"><label>Transaction DB connection string (optional)</label><input type="text" id="envTxnDb"></div>
           <div class="field"><label>Report DB connection string (optional)</label><input type="text" id="envReportDb"></div>
+          ` : ''}
         </div>
         <div class="field"><label><input type="checkbox" id="envRequiresCleanup"> Requires test-data cleanup after runs</label></div>
         <div class="actions-row"><button type="button" id="saveEnvironmentBtn">Save environment</button></div>
@@ -2406,6 +2443,14 @@ async function updateAutomationScriptTier(id, testTier){
     showToast('Tier set to ' + testTier + '.', 'success');
   } catch(err){ showToast('Could not update tier: ' + err.message, 'error'); }
 }
+async function updateAutomationScriptLayer(id, layer){
+  try{
+    const updated = await apiFetch('/api/automation-scripts/' + id + '/layer', { method:'PATCH', body: JSON.stringify({ layer }) });
+    DATA.automationScripts = (DATA.automationScripts||[]).map(s => s.id === id ? updated : s);
+    render();
+    showToast('Platform set to ' + layer + '.', 'success');
+  } catch(err){ showToast('Could not update platform: ' + err.message, 'error'); }
+}
 async function executeTierBatch(){
   if(!state.automationScriptsModuleId){ showToast('Pick a module first.', 'error'); return; }
   if(state.tierRunMode !== 'Mock' && !state.tierRunEnvId){ showToast('Pick an Environment Target first.', 'error'); return; }
@@ -2417,7 +2462,8 @@ async function executeTierBatch(){
       environmentTargetId: Number(state.tierRunEnvId) || 0,
       environmentCredentialId: state.tierRunCredId ? Number(state.tierRunCredId) : null,
       testRunId: state.tierRunTestRunId ? Number(state.tierRunTestRunId) : null,
-      mode: state.tierRunMode || 'Real'
+      mode: state.tierRunMode || 'Real',
+      layer: (state.automationPlatform === 'Dashboard' || state.automationPlatform === 'App-API') ? state.automationPlatform : null
     };
     const result = await apiFetch('/api/automation-scripts/execute-batch', { method:'POST', body: JSON.stringify(body) });
     state.tierRunResult = result;
@@ -2538,11 +2584,20 @@ function renderBatchGeneratePanel(){
 }
 
 function renderRunScriptPanel(s){
+  if(s.layer === 'App'){
+    return `
+      <tr><td colspan="8">
+        <div style="border:1px solid var(--border,#ddd);border-radius:6px;padding:10px;">
+          <p class="sub" style="margin:0;">Native Run isn't available for App (mobile) scripts -- there's no in-process way to drive a real device/emulator the way this runner drives a Dashboard/App-API HTTP call. Results for this script come from an external CI pipeline (GitHub Actions + Appium/Espresso/XCUITest/Maestro on a device farm) posting back to the results endpoint, and will show up in whichever Test Run that pipeline targets.</p>
+        </div>
+      </td></tr>
+    `;
+  }
   const envId = state.runScriptEnvId;
   const creds = envId ? (DATA.environmentCredentials[envId]||[]) : [];
   const result = state.runScriptResult && state.runScriptResult.scriptId === s.id ? state.runScriptResult : null;
   return `
-    <tr><td colspan="7">
+    <tr><td colspan="8">
       <div style="border:1px solid var(--border,#ddd);border-radius:6px;padding:10px;">
         <p class="sub" style="margin-top:0;">Runs natively inside Test Case Hub -- no external Playwright/Node process, nothing to download. Picks up the environment's Master DB connection and, if selected, a named credential's stored token for Authorization.</p>
         <div class="grid2">
@@ -2590,6 +2645,15 @@ function renderRunScriptPanel(s){
 }
 
 function renderTierRunPanel(){
+  if(state.automationPlatform === 'App' || state.automationPlatform === 'Both'){
+    return `
+      <div style="border:1px solid var(--border,#ddd);border-radius:6px;padding:10px;margin-top:10px;">
+        <p class="sub" style="margin:0;">${state.automationPlatform === 'App'
+          ? "Run tier isn't available on the App platform -- App scripts have no native Run (see above)."
+          : "Run tier needs a single platform to batch against -- switch to Dashboard or App API above to run a tier."}</p>
+      </div>
+    `;
+  }
   const creds = state.tierRunEnvId ? (DATA.environmentCredentials[state.tierRunEnvId]||[]) : [];
   const r = state.tierRunResult;
   return `
@@ -2656,7 +2720,8 @@ function renderTierRunPanel(){
   `;
 }
 function renderAutomationScripts(){
-  const rows = (DATA.automationScripts||[]).map(s => `
+  const platformScripts = (DATA.automationScripts||[]).filter(s => scriptMatchesPlatform(s.layer, state.automationPlatform));
+  const rows = platformScripts.map(s => `
     <tr>
       <td>${escapeHtml(s.fileName)}<br><small class="muted">${escapeHtml(s.testCaseId||'')}</small></td>
       <td>${escapeHtml(s.framework||'')}</td>
@@ -2681,19 +2746,30 @@ function renderAutomationScripts(){
         ` : `<span class="badge">${escapeHtml(s.testTier||'Regression')}</span>`}
       </td>
       <td>
+        ${canEditContent() ? `
+          <select data-script-layer="${s.id}">
+            <option value="Dashboard" ${(s.layer||'Dashboard')==='Dashboard'?'selected':''}>Dashboard</option>
+            <option value="App-API" ${s.layer==='App-API'?'selected':''}>App API</option>
+            <option value="App" ${s.layer==='App'?'selected':''}>App</option>
+          </select>
+        ` : `<span class="badge">${escapeHtml(s.layer||'Dashboard')}</span>`}
+      </td>
+      <td>
         <button type="button" class="small ghost" data-view-script="${s.id}">${state.viewingScriptId===s.id?'Hide':'View'}</button>
         ${canSeeAutomationMenu() ? (s.hasExecutionDefinition
           ? `<button type="button" class="small ghost" data-toggle-run-script="${s.id}">${state.runningScriptId===s.id?'Hide':'Run'}</button>`
           : `<span class="sub" title="No native execution definition set for this script yet">Run n/a</span>`) : ''}
       </td>
     </tr>
-    ${state.viewingScriptId===s.id ? `<tr><td colspan="7"><textarea readonly style="width:100%;min-height:220px;font-family:monospace;font-size:12px;">${escapeHtml(s.content)}</textarea></td></tr>` : ''}
+    ${state.viewingScriptId===s.id ? `<tr><td colspan="8"><textarea readonly style="width:100%;min-height:220px;font-family:monospace;font-size:12px;">${escapeHtml(s.content)}</textarea></td></tr>` : ''}
     ${state.runningScriptId===s.id ? renderRunScriptPanel(s) : ''}
   `).join('');
   return `
     <div class="panel">
       <h3>Automation Scripts</h3>
       <p class="sub" style="margin-top:-6px;">Two ways a script lands here: (1) a Claude session connected to this MCP + your repo's MCP calls save_automation_script, or (2) the "Generate with Claude" button below calls Claude directly using the company's own Anthropic key (AI Settings). Either way it's stored company/module/test-case scoped, never pushed to the company's own repo.</p>
+      <p class="sub" style="margin:0 0 4px;">Platform:</p>
+      ${renderPlatformSelector()}
       <div class="grid2" style="max-width:520px;">
         <div class="field"><label>Module</label>
           <select id="automationScriptsModuleSelect">
@@ -2712,8 +2788,8 @@ function renderAutomationScripts(){
       ` : ''}
       ${state.automationScriptsModuleId && canSeeAutomationMenu() ? renderTierRunPanel() : ''}
       <table style="margin-top:14px;">
-        <thead><tr><th>File</th><th>Framework</th><th>Version</th><th>Status</th><th>Generated by</th><th>Tier</th><th></th></tr></thead>
-        <tbody>${!state.automationScriptsModuleId ? '<tr><td colspan="7" class="empty">Select a module to see its saved scripts.</td></tr>' : (state.automationScriptsLoading ? '<tr><td colspan="7" class="empty">Loading…</td></tr>' : (rows || '<tr><td colspan="7" class="empty">No scripts saved for this module yet.</td></tr>'))}</tbody>
+        <thead><tr><th>File</th><th>Framework</th><th>Version</th><th>Status</th><th>Generated by</th><th>Tier</th><th>Platform</th><th></th></tr></thead>
+        <tbody>${!state.automationScriptsModuleId ? '<tr><td colspan="8" class="empty">Select a module to see its saved scripts.</td></tr>' : (state.automationScriptsLoading ? '<tr><td colspan="8" class="empty">Loading…</td></tr>' : (rows || `<tr><td colspan="8" class="empty">No ${escapeHtml(state.automationPlatform)} scripts saved for this module yet.</td></tr>`))}</tbody>
       </table>
       <div class="actions-row"><button type="button" class="ghost" id="closeAutomationScripts">Close</button></div>
     </div>
@@ -4198,6 +4274,12 @@ function wireEvents(){
   }));
   document.querySelectorAll('[data-script-tier]').forEach(el => el.addEventListener('change', (e) => {
     updateAutomationScriptTier(Number(el.dataset.scriptTier), e.target.value);
+  }));
+  document.querySelectorAll('[data-script-layer]').forEach(el => el.addEventListener('change', (e) => {
+    updateAutomationScriptLayer(Number(el.dataset.scriptLayer), e.target.value);
+  }));
+  document.querySelectorAll('[data-set-platform]').forEach(el => el.addEventListener('click', () => {
+    setAutomationPlatform(el.dataset.setPlatform);
   }));
   const toggleTierRun = document.getElementById('toggleTierRun');
   if(toggleTierRun) toggleTierRun.addEventListener('click', () => { state.showTierRun = !state.showTierRun; state.tierRunResult = null; render(); });

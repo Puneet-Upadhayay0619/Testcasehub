@@ -115,6 +115,17 @@ public class ScriptExecutionService
             return new ExecutionOutcome(false, "Blocked", log,
                 "This script has no native execution definition yet -- only the human-written Playwright script (Content) exists. It needs to be converted to the step DSL before Test Case Hub can run it natively.");
 
+        // Mobile app ("App" layer) has no native execution path -- there is no in-process HTTP
+        // client that can drive a real device/emulator the way RunHttpStepAsync drives a
+        // Dashboard/App-API HTTP call. These results come from an external pipeline (GitHub
+        // Actions + Appium/Espresso/XCUITest/Maestro on a device farm) posting back to the
+        // existing CI-facing results endpoint instead -- see the Mobile App Automation
+        // discussion notes. Blocked here defensively even though the UI already disables the Run
+        // button for App-layer scripts, so a direct API/MCP call can't bypass it either.
+        if (script.Layer == "App")
+            return new ExecutionOutcome(false, "Blocked", log,
+                "Native Run isn't available for App (mobile) scripts -- results are recorded via an external CI pipeline (GitHub Actions/device farm) posting to this Test Run instead, not by Test Case Hub's own runner.");
+
         List<ExecStep>? steps;
         try { steps = JsonSerializer.Deserialize<List<ExecStep>>(script.ExecutionDefinitionJson, JsonOpts); }
         catch (Exception ex)
@@ -156,7 +167,7 @@ public class ScriptExecutionService
                 switch (step.Type)
                 {
                     case "http":
-                        await RunHttpStepAsync(step, env, bearerToken, vars, log, mode);
+                        await RunHttpStepAsync(step, env, bearerToken, vars, log, mode, script.Layer);
                         break;
                     case "sql":
                         await RunSqlStepAsync(step, env, vars, log, mode);
@@ -190,7 +201,7 @@ public class ScriptExecutionService
         return new ExecutionOutcome(true, "Pass", log, null);
     }
 
-    private async Task RunHttpStepAsync(ExecStep step, EnvironmentTarget env, string? bearerToken, Dictionary<string, JsonElement> vars, List<string> log, ExecutionMode mode)
+    private async Task RunHttpStepAsync(ExecStep step, EnvironmentTarget env, string? bearerToken, Dictionary<string, JsonElement> vars, List<string> log, ExecutionMode mode, string? scriptLayer = null)
     {
         if (mode == ExecutionMode.Mock)
         {
@@ -206,9 +217,16 @@ public class ScriptExecutionService
             return;
         }
 
-        if (string.IsNullOrWhiteSpace(env.DashboardBaseUrl))
-            throw new InvalidOperationException("EnvironmentTarget has no DashboardBaseUrl configured.");
-        var baseUrl = env.DashboardBaseUrl.TrimEnd('/');
+        // App-API scripts hit the App API host (env.AppApiBaseUrl) instead of the Dashboard host
+        // -- e.g. Dashboard's fa-dashboard-apis[-beta].fieldassist.io vs whatever the mobile
+        // app's own backend is at. Everything else (Dashboard, or a script with no Layer set
+        // yet) keeps hitting DashboardBaseUrl, same as before this existed.
+        var useAppApi = scriptLayer == "App-API";
+        var configuredUrl = useAppApi ? env.AppApiBaseUrl : env.DashboardBaseUrl;
+        var urlFieldName = useAppApi ? "AppApiBaseUrl" : "DashboardBaseUrl";
+        if (string.IsNullOrWhiteSpace(configuredUrl))
+            throw new InvalidOperationException($"EnvironmentTarget has no {urlFieldName} configured.");
+        var baseUrl = configuredUrl.TrimEnd('/');
         var path = step.Path ?? "";
         var url = baseUrl + (path.StartsWith("/") ? path : "/" + path);
 

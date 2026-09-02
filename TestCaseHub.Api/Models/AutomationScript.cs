@@ -85,4 +85,15 @@ public class AutomationScript
     // full suite, never accidentally swept into a "just run Smoke" quick check).
     [MaxLength(16)]
     public string TestTier { get; set; } = Models.TestTier.Regression;
+
+    // Platform selector (Dashboard / App-API / App -- same three canonical values as
+    // TestCase.Layer, see TestCasesController.LayerCodes). Left blank on purpose here (rather
+    // than defaulting to "Dashboard" like TestTier does) so the storage layer can tell "never
+    // set" apart from "explicitly Dashboard" and INHERIT it from the linked TestCase's own
+    // Layer at save time (falling back to "Dashboard" only if there is no linked test case
+    // either) -- see SaveAutomationScriptAsync. Drives two things: (1) which EnvironmentTarget
+    // URL field native http steps hit (DashboardBaseUrl vs AppApiBaseUrl), and (2) the
+    // Automation section's platform filter/selector in the UI.
+    [MaxLength(16)]
+    public string Layer { get; set; } = "";
 }
